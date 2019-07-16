@@ -1,0 +1,32 @@
+syntax="proto3";
+
+import "google/protobuf/empty.proto";
+
+service Aft {
+  rpc StartTransaction(google.protobuf.Empty) returns (Transaction) {}
+  rpc Write(KeyRequest) returns (KeyRequest) {}
+  rpc Read(KeyRequest) returns (KeyRequest) {}
+  rpc CommitTransaction(Transaction) returns (Transaction) {}
+  rpc AbortTransaction(Transaction) returns (Transaction) {}
+}
+
+enum TransactionStatus {
+  RUNNING = 0;
+  COMMITTED = 1;
+  ABORTED = 2;
+}
+
+message Transaction {
+  string id = 1;
+  TransactionStatus status = 2;
+}
+
+message KeyRequest {
+  message KeyPair {
+    string key = 1;
+    bytes value = 2;
+  }
+
+  string tid = 1;
+  repeated KeyPair pairs = 2;
+}
