@@ -5,6 +5,8 @@ import (
 	"log"
 	"net"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/endpoints"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/golang/protobuf/ptypes/empty"
@@ -91,9 +93,10 @@ func (s *aftServer) CommitTransaction(ctx context.Context, transaction *pb.Trans
 		if !success {
 			// TODO: how do we deal with this? we'd have to roll back, but is this a
 			// real concern?
+			status = pb.TransactionStatus_ABORTED
+		} else {
+			status = pb.TransactionStatus_COMMITTED
 		}
-
-		status = pb.TransactionStatus_COMMITTED
 	} else {
 		status = pb.TransactionStatus_ABORTED
 	}
@@ -120,9 +123,19 @@ const (
 func newAftServer() *aftServer {
 	// TODO: add configs for different consistency, storage managers
 	l := &LWWConsistencyManager{}
-	s := &S3StorageManager{bucket: "vsreekanti", s3Client: s3.New(session.New())}
 
-	return &aftServer{consistencyManager: l, storageManager: s}
+	s3c := s3.New(session.New(), &aws.Config{
+		Region: aws.String(endpoints.UsEast1RegionID),
+	})
+
+	s := &S3StorageManager{bucket: "vsreekanti", s3Client: s3c}
+
+	return &aftServer{
+		transactions:       map[string]Transaction{},
+		updateBuffer:       map[string][]KeyUpdate{},
+		consistencyManager: l,
+		storageManager:     s,
+	}
 }
 
 func main() {
