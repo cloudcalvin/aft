@@ -1,4 +1,4 @@
-package main
+package consistency
 
 type ConsistencyManager interface {
 	// Based on the set of keys read and written by this transaction check whether or not it should be allowed to commit.
@@ -12,14 +12,4 @@ type ConsistencyManager interface {
 	// storage system.
 	// TODO: should this be a list of keys, or just a single key?
 	GetValidKeyVersion(key string, tid string) string
-}
-
-type LWWConsistencyManager struct{}
-
-func (lww *LWWConsistencyManager) ValidateTransaction(tid string, readSet []string, writeSet []string) bool {
-	return true
-}
-
-func (lww *LWWConsistencyManager) GetValidKeyVersion(key string, tid string) string {
-	return key
 }

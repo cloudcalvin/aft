@@ -3,10 +3,28 @@ syntax="proto3";
 import "google/protobuf/empty.proto";
 
 service Aft {
+  // Starts a new transaction in the system and returns a unique transaction
+  // ID. The updates made in the context of this transaction will not be
+  // persisted until CommitTransaction is called.
   rpc StartTransaction(google.protobuf.Empty) returns (Transaction) {}
+
+  // Tentatively write a value or batch of values to the storage engine. These
+  // writes will not be committed until CommitTransaction is called. If
+  // AbortTransaction is called, these writes will be dropped.
   rpc Write(KeyRequest) returns (KeyRequest) {}
+
+  // Retrieve a value from the storage engine.
   rpc Read(KeyRequest) returns (KeyRequest) {}
+
+  // Commits buffered writes to the storage engine. The commit is not
+  // guaranteed to succeed and may depend on the isolation mechanisms being
+  // used in order to determine whether the transactions updates and reads are
+  // valid.
   rpc CommitTransaction(Transaction) returns (Transaction) {}
+
+  // Aborts all of the updates made by this transaction. The buffered updates
+  // will be dropped, and the transaction in the underlying engine will be
+  // closed.
   rpc AbortTransaction(Transaction) returns (Transaction) {}
 }
 

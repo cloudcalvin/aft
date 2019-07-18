@@ -5,21 +5,20 @@ import (
 	"log"
 	"net"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/endpoints"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/golang/protobuf/ptypes/empty"
 	uuid "github.com/nu7hatch/gouuid"
-	pb "github.com/vsreekanti/aft/proto/aft"
 	"google.golang.org/grpc"
+
+	"github.com/vsreekanti/aft/consistency"
+	pb "github.com/vsreekanti/aft/proto/aft"
+	"github.com/vsreekanti/aft/storage"
 )
 
 type aftServer struct {
 	transactions       map[string]Transaction
 	updateBuffer       map[string][]KeyUpdate
-	storageManager     StorageManager
-	consistencyManager ConsistencyManager
+	storageManager     storage.StorageManager
+	consistencyManager consistency.ConsistencyManager
 }
 
 func (s *aftServer) StartTransaction(ctx context.Context, _ *empty.Empty) (*pb.Transaction, error) {
@@ -32,6 +31,8 @@ func (s *aftServer) StartTransaction(ctx context.Context, _ *empty.Empty) (*pb.T
 
 	txn := Transaction{id: tid, txnStatus: pb.TransactionStatus_RUNNING}
 	s.transactions[tid] = txn
+
+	s.storageManager.StartTransaction(tid)
 
 	return &pb.Transaction{Id: tid}, nil
 }
@@ -58,7 +59,7 @@ func (s *aftServer) Read(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyR
 
 	for _, request := range requests.Pairs {
 		key := s.consistencyManager.GetValidKeyVersion(request.Key, requests.Tid)
-		val, err := s.storageManager.Get(key)
+		val, err := s.storageManager.Get(key, requests.Tid)
 		if err == nil {
 			// TODO: the transaction should probably abort? or do we just return that
 			// the key doesn't exist
@@ -82,7 +83,7 @@ func (s *aftServer) CommitTransaction(ctx context.Context, transaction *pb.Trans
 		// write updates to storage managers
 		success := true
 		for _, update := range s.updateBuffer[tid] {
-			ok = s.storageManager.Put(update.key, update.value)
+			ok = s.storageManager.Put(update.key, update.value, tid)
 
 			if !ok {
 				success = false
@@ -101,6 +102,7 @@ func (s *aftServer) CommitTransaction(ctx context.Context, transaction *pb.Trans
 		status = pb.TransactionStatus_ABORTED
 	}
 
+	s.storageManager.CommitTransaction(tid)
 	s.transactions[tid].SetStatus(status)
 
 	// TODO: we should eventually GC finished transactions, but when?
@@ -111,6 +113,7 @@ func (s *aftServer) CommitTransaction(ctx context.Context, transaction *pb.Trans
 func (s *aftServer) AbortTransaction(ctx context.Context, transaction *pb.Transaction) (*pb.Transaction, error) {
 	tid := transaction.Id
 	delete(s.updateBuffer, tid)
+	s.storageManager.AbortTransaction(tid)
 	s.transactions[tid].SetStatus(pb.TransactionStatus_ABORTED)
 
 	return &pb.Transaction{Id: tid, Status: pb.TransactionStatus_ABORTED}, nil
@@ -122,13 +125,9 @@ const (
 
 func newAftServer() *aftServer {
 	// TODO: add configs for different consistency, storage managers
-	l := &LWWConsistencyManager{}
+	l := &consistency.LWWConsistencyManager{}
 
-	s3c := s3.New(session.New(), &aws.Config{
-		Region: aws.String(endpoints.UsEast1RegionID),
-	})
-
-	s := &S3StorageManager{bucket: "vsreekanti", s3Client: s3c}
+	s := storage.NewS3StorageManager("vsreekanti")
 
 	return &aftServer{
 		transactions:       map[string]Transaction{},
