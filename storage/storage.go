@@ -1,21 +1,31 @@
 package storage
 
+import (
+	pb "github.com/vsreekanti/aft/proto/aft"
+)
+
 type StorageManager interface {
 	// Start a new transaction with the execution ID passed in; this ID will be
 	// used for all operations relevant to this particular transaction.
-	StartTransaction(id string) bool
+	StartTransaction(id string) error
 
 	// Commit all of the changes made in this transaction to the storage engine.
-	CommitTransaction(id string) bool
+	CommitTransaction(transaction pb.TransactionRecord) error
 
 	// Abort all of the changes made in this transaction, so none of them will be
 	// persisted in the storage engine.
-	AbortTransaction(id string) bool
+	AbortTransaction(transaction pb.TransactionRecord) error
 
 	// As a part of the transaction owned by tid, insert a key-value pair into
 	// the storage engine.
-	Put(key string, val []byte, tid string) bool
+	Put(key string, val pb.KeyValuePair) error
 
 	// Retrieve the given key as a part of the transaction tid.
-	Get(key string, tid string) ([]byte, error)
+	Get(key string) (pb.KeyValuePair, error)
+
+	// Returns a list of the keys that start with the given prefix.
+	List(prefix string) ([]string, error)
+
+	// Deletes the given key from the underlying storage engine.
+	Delete(key string) error
 }

@@ -1,3 +1,7 @@
 # GO FILES 
 
 *.pb.go
+
+# EXECUTABLES
+
+aft
