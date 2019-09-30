@@ -13,8 +13,8 @@ import (
 type ReadAtomicConsistencyManager struct{}
 
 const (
-	keyTemplate = "/data/%s/%d-%s"
-	keyPrefix   = "/data/%s"
+	keyTemplate = "/data/%s/%d/%s"
+	keyPrefix   = "data/%s"
 )
 
 func (racm *ReadAtomicConsistencyManager) ValidateTransaction(tid string, readSet map[string]string, writeSet []string) bool {
@@ -88,7 +88,8 @@ func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
 		// Check to see if this keyVersion is older than all of the keys that we
 		// have already read.
 		for read := range readSet {
-			if !compareKeys(read, keyVersion) {
+			readVersion := racm.GetStorageKeyName(read, &transaction)
+			if !compareKeys(readVersion, keyVersion) {
 				validVersion = false
 				break
 			}
@@ -117,6 +118,16 @@ func (racm *ReadAtomicConsistencyManager) GetStorageKeyName(key string, transact
 // argument `one` is newer than the key passed in as argument `two`. It returns
 // false otherwise.
 func compareKeys(one string, two string) bool {
+	if one[0] == '/' {
+		rn := []rune(one)
+		one = string(rn[1:len(rn)])
+	}
+
+	if two[0] == '/' {
+		rn := []rune(two)
+		two = string(rn[1:len(rn)])
+	}
+
 	oneTs, oneTid := splitKey(one)
 	twoTs, twoTid := splitKey(two)
 
@@ -127,11 +138,10 @@ func compareKeys(one string, two string) bool {
 // above, and it returns the timestamp and UUID of the transaction that wrote
 // it.
 func splitKey(key string) (int64, string) {
-	versionPair := strings.Split(key, "/")[2]
-	splits := strings.Split(versionPair, "-")
+	splits := strings.Split(key, "/")
 
 	// We know err won't be nil unless someone is interfering with the system.
-	txnTs, _ := strconv.ParseInt(splits[0], 10, 64)
+	txnTs, _ := strconv.ParseInt(splits[2], 10, 64)
 	tid := splits[1]
 
 	return txnTs, tid

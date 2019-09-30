@@ -111,14 +111,15 @@ func (s *aftServer) Read(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyR
 			if val, ok := s.readCache[key]; ok {
 				returnValue = val.Value
 			} else { // Otherwise, get the correct key version from storage.
-				returnValue, err := s.storageManager.Get(key)
+				kvPair, err := s.storageManager.Get(key)
 
 				// If the GET request returns an error, that means the key was not
 				// accessible, so we return nil.
 				if err != nil {
 					return &pb.KeyRequest{}, err
 				} else { // Otherwise, add this key to our read cache.
-					s.readCache[key] = returnValue
+					s.readCache[key] = kvPair
+					returnValue = kvPair.Value
 				}
 			}
 
@@ -244,7 +245,8 @@ func newAftServer() (*aftServer, *aftConfig) {
 
 	var storageManager storage.StorageManager
 	if config.StorageType == "s3" {
-		storageManager = &storage.S3StorageManager{}
+		// TODO: This bucket path should be in the conf.
+		storageManager = storage.NewS3StorageManager("vsreekanti")
 	} else {
 		log.Fatal("Unrecognized storageType %s. Valid types are: s3.", config.ConsistencyType)
 		os.Exit(3)
@@ -262,6 +264,7 @@ func newAftServer() (*aftServer, *aftConfig) {
 		updateBuffer:         map[string][]keyUpdate{},
 		consistencyManager:   consistencyManager,
 		storageManager:       storageManager,
+		readCache:            map[string]pb.KeyValuePair{},
 		FinishedTransactions: map[string]pb.TransactionRecord{},
 		TransactionLock:      &sync.Mutex{},
 	}, &config

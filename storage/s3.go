@@ -26,7 +26,7 @@ func NewS3StorageManager(bucket string) *S3StorageManager {
 		Region: aws.String(endpoints.UsEast1RegionID),
 	})
 
-	return &S3StorageManager{bucket: "vsreekanti", s3Client: s3c}
+	return &S3StorageManager{bucket: bucket, s3Client: s3c}
 }
 
 func (s3 *S3StorageManager) StartTransaction(id string) error {
@@ -67,10 +67,11 @@ func (s3 *S3StorageManager) Get(key string) (pb.KeyValuePair, error) {
 		return pb.KeyValuePair{}, err
 	}
 
-	body := make([]byte, *getObjectOutput.ContentLength)
-	_, err = getObjectOutput.Body.Read(body)
+	numBytes := *getObjectOutput.ContentLength
+	body := make([]byte, numBytes)
+	n, err := getObjectOutput.Body.Read(body)
 
-	if err != nil {
+	if int64(n) != numBytes && err != nil {
 		return pb.KeyValuePair{}, err
 	}
 
