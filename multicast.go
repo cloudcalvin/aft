@@ -15,7 +15,7 @@ const (
 	addressTemplate = "%s%s"
 )
 
-func MulticastRoutine(server *aftServer, replicaList []string) {
+func MulticastRoutine(server *AftServer, replicaList []string) {
 	// Create a new Ticker that times out 1 second.
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -39,15 +39,15 @@ func MulticastRoutine(server *aftServer, replicaList []string) {
 		_ = <-ticker.C
 
 		// Lock the mutex, serialize the newly committed transactions, and unlock.
-		server.TransactionLock.Lock()
+		server.FinishedTransactionLock.Lock()
 		message := pb.TransactionList{}
 		for tid := range server.FinishedTransactions {
 			if _, ok := seenTransactions[tid]; !ok {
 				record := server.FinishedTransactions[tid]
-				message.Records = append(message.Records, &record)
+				message.Records = append(message.Records, record)
 			}
 		}
-		server.TransactionLock.Unlock()
+		server.FinishedTransactionLock.Unlock()
 
 		// Gossip to the other machines in the replica list.
 		// TODO: Figure out how to make this asynchronous. There's no need to check

@@ -1,8 +1,9 @@
 package consistency
 
 import (
+	"sync"
+
 	pb "github.com/vsreekanti/aft/proto/aft"
-	"github.com/vsreekanti/aft/storage"
 )
 
 type ConsistencyManager interface {
@@ -17,11 +18,13 @@ type ConsistencyManager interface {
 	// storage system.
 	GetValidKeyVersion(
 		key string,
-		transaction pb.TransactionRecord,
-		readSet map[string]string,
-		storageManager storage.StorageManager,
-		readCache map[string]pb.KeyValuePair) (string, error)
+		transaction *pb.TransactionRecord,
+		readCache *map[string]pb.KeyValuePair,
+		readCacheLock *sync.RWMutex,
+		keyVersionIndex *map[string]*[]string,
+		keyVersionIndexLock *sync.RWMutex,
+	) (string, error)
 
 	// TODO: Add description of this function.
-	GetStorageKeyName(key string, transaction *pb.TransactionRecord) string
+	GetStorageKeyName(key string, timestamp int64, transactionId string) string
 }

@@ -1,8 +1,9 @@
 package consistency
 
 import (
+	"sync"
+
 	pb "github.com/vsreekanti/aft/proto/aft"
-	"github.com/vsreekanti/aft/storage"
 )
 
 type LWWConsistencyManager struct{}
@@ -13,14 +14,15 @@ func (lww *LWWConsistencyManager) ValidateTransaction(tid string, readSet map[st
 
 func (lww *LWWConsistencyManager) GetValidKeyVersion(
 	key string,
-	transaction pb.TransactionRecord,
-	readSet map[string]string,
-	storageManager storage.StorageManager,
-	readCache map[string]pb.KeyValuePair) (string, error) {
-
+	transaction *pb.TransactionRecord,
+	readCache *map[string]pb.KeyValuePair,
+	readCacheLock *sync.RWMutex,
+	keyVersionIndex *map[string]*[]string,
+	keyVersionIndexLock *sync.RWMutex,
+) (string, error) {
 	return key, nil
 }
 
-func (lww *LWWConsistencyManager) GetStorageKeyName(key string, transaction *pb.TransactionRecord) string {
+func (lww *LWWConsistencyManager) GetStorageKeyName(key string, timestamp int64, transactionId string) string {
 	return key
 }

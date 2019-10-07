@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	pb "github.com/vsreekanti/aft/proto/aft"
-	"github.com/vsreekanti/aft/storage"
 )
 
 type ReadAtomicConsistencyManager struct{}
 
 const (
 	keyTemplate = "/data/%s/%d/%s"
-	keyPrefix   = "data/%s"
+	// keyPrefix   = "/data/%s"
 )
 
 func (racm *ReadAtomicConsistencyManager) ValidateTransaction(tid string, readSet map[string]string, writeSet []string) bool {
@@ -23,27 +23,31 @@ func (racm *ReadAtomicConsistencyManager) ValidateTransaction(tid string, readSe
 
 func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
 	key string,
-	transaction pb.TransactionRecord,
-	readSet map[string]string,
-	storageManager storage.StorageManager,
-	readCache map[string]pb.KeyValuePair) (string, error) {
+	transaction *pb.TransactionRecord,
+	readCache *map[string]pb.KeyValuePair,
+	readCacheLock *sync.RWMutex,
+	keyVersionIndex *map[string]*[]string,
+	keyVersionIndexLock *sync.RWMutex,
+) (string, error) {
 
-	if val, ok := readSet[key]; ok {
+	if val, ok := transaction.ReadSet[key]; ok {
 		return val, nil
 	}
 
 	// Check if the key version is constrained by any of the keys we've already
 	// read.
 	constraintSet := []string{}
-	for read := range readSet {
+	for read := range transaction.ReadSet {
 		// We ignore the boolean because we are guaranteed to have the key in the
 		// readCache.
-		fullName, _ := readSet[read]
-		kvPair, _ := readCache[fullName]
+		fullName, _ := transaction.ReadSet[read]
+		readCacheLock.RLock()
+		kvPair, _ := (*readCache)[fullName]
+		readCacheLock.RUnlock()
 
 		for _, cowritten := range kvPair.CowrittenKeys {
 			if key == cowritten {
-				constraintSet = append(constraintSet, racm.GetStorageKeyName(key, &transaction))
+				constraintSet = append(constraintSet, racm.GetStorageKeyName(key, kvPair.Timestamp, kvPair.Tid))
 			}
 		}
 	}
@@ -67,14 +71,11 @@ func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
 	// at newer versions---if anything conflicts, we abort.
 
 	// Retrieve all of the versions available for this key.
-	prefix := fmt.Sprintf(keyPrefix, key)
-	keyVersions, err := storageManager.List(prefix)
+	keyVersionIndexLock.RLock()
+	keyVersions, ok := (*keyVersionIndex)[key]
+	keyVersionIndexLock.RUnlock()
 
-	if err != nil {
-		return "", err
-	}
-
-	if len(keyVersions) == 0 {
+	if !ok || len(*keyVersions) == 0 {
 		return "", errors.New(fmt.Sprintf("There are no versions of key %s.", key))
 	}
 
@@ -82,13 +83,13 @@ func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
 	// are older than things we've already read.
 	var latest string
 	latest = ""
-	for _, keyVersion := range keyVersions {
+	for _, keyVersion := range *keyVersions {
 		validVersion := true
 
 		// Check to see if this keyVersion is older than all of the keys that we
 		// have already read.
-		for read := range readSet {
-			readVersion := racm.GetStorageKeyName(read, &transaction)
+		for read := range transaction.ReadSet {
+			readVersion := racm.GetStorageKeyName(read, transaction.Timestamp, transaction.Id)
 			if !compareKeys(readVersion, keyVersion) {
 				validVersion = false
 				break
@@ -109,8 +110,8 @@ func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
 	return latest, nil
 }
 
-func (racm *ReadAtomicConsistencyManager) GetStorageKeyName(key string, transaction *pb.TransactionRecord) string {
-	return fmt.Sprintf(keyTemplate, key, transaction.Timestamp, transaction.Id)
+func (racm *ReadAtomicConsistencyManager) GetStorageKeyName(key string, timestamp int64, transactionId string) string {
+	return fmt.Sprintf(keyTemplate, key, timestamp, transactionId)
 }
 
 // This function takes in two keys that are expected to conform to the string

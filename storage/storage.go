@@ -4,24 +4,29 @@ import (
 	pb "github.com/vsreekanti/aft/proto/aft"
 )
 
+var transactionKey = "/transactions/%s-%d"
+
 type StorageManager interface {
 	// Start a new transaction with the execution ID passed in; this ID will be
 	// used for all operations relevant to this particular transaction.
 	StartTransaction(id string) error
 
 	// Commit all of the changes made in this transaction to the storage engine.
-	CommitTransaction(transaction pb.TransactionRecord) error
+	CommitTransaction(transaction *pb.TransactionRecord) error
 
 	// Abort all of the changes made in this transaction, so none of them will be
 	// persisted in the storage engine.
-	AbortTransaction(transaction pb.TransactionRecord) error
+	AbortTransaction(transaction *pb.TransactionRecord) error
+
+	// Retrieve a transaction record from the storage engine.
+	GetTransaction(transactionKey string) (*pb.TransactionRecord, error)
 
 	// As a part of the transaction owned by tid, insert a key-value pair into
 	// the storage engine.
-	Put(key string, val pb.KeyValuePair) error
+	Put(key string, val *pb.KeyValuePair) error
 
 	// Retrieve the given key as a part of the transaction tid.
-	Get(key string) (pb.KeyValuePair, error)
+	Get(key string) (*pb.KeyValuePair, error)
 
 	// Returns a list of the keys that start with the given prefix.
 	List(prefix string) ([]string, error)

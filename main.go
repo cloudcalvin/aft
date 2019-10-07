@@ -2,21 +2,15 @@ package main
 
 import (
 	"context"
-	"io/ioutil"
 	"log"
 	"net"
-	"os"
-	"sync"
 	"time"
 
 	"github.com/golang/protobuf/ptypes/empty"
 	uuid "github.com/nu7hatch/gouuid"
 	"google.golang.org/grpc"
-	"gopkg.in/yaml.v2"
 
-	"github.com/vsreekanti/aft/consistency"
 	pb "github.com/vsreekanti/aft/proto/aft"
-	"github.com/vsreekanti/aft/storage"
 )
 
 type keyUpdate struct {
@@ -26,25 +20,7 @@ type keyUpdate struct {
 	written bool
 }
 
-type aftConfig struct {
-	ConsistencyType string   `yaml:"consistencyType"`
-	StorageType     string   `yaml:"storageType"`
-	IpAddress       string   `yaml:"ipAddress"`
-	ReplicaList     []string `yaml:"replicaList"`
-}
-
-type aftServer struct {
-	id                   string
-	transactions         map[string]pb.TransactionRecord
-	updateBuffer         map[string][]keyUpdate
-	readCache            map[string]pb.KeyValuePair
-	storageManager       storage.StorageManager
-	consistencyManager   consistency.ConsistencyManager
-	FinishedTransactions map[string]pb.TransactionRecord
-	TransactionLock      *sync.Mutex
-}
-
-func (s *aftServer) StartTransaction(ctx context.Context, _ *empty.Empty) (*pb.TransactionTag, error) {
+func (s *AftServer) StartTransaction(ctx context.Context, _ *empty.Empty) (*pb.TransactionTag, error) {
 	uid, err := uuid.NewV4()
 	if err != nil {
 		return nil, err
@@ -53,46 +29,62 @@ func (s *aftServer) StartTransaction(ctx context.Context, _ *empty.Empty) (*pb.T
 	tid := uid.String()
 	transactionsTs := time.Now().UnixNano()
 
-	txn := pb.TransactionRecord{
+	txn := &pb.TransactionRecord{
 		Id:        tid,
 		Timestamp: transactionsTs,
 		Status:    pb.TransactionStatus_RUNNING,
-		ReplicaId: s.id,
+		ReplicaId: s.Id,
 		WriteSet:  []string{},
 		ReadSet:   map[string]string{},
 	}
 
-	s.transactions[tid] = txn
-	s.storageManager.StartTransaction(tid)
+	s.StorageManager.StartTransaction(tid)
+
+	s.RunningTransactionLock.Lock()
+	s.RunningTransactions[tid] = txn
+	s.RunningTransactionLock.Unlock()
 
 	return &pb.TransactionTag{Id: tid, Status: pb.TransactionStatus_RUNNING}, nil
 }
 
-func (s *aftServer) Write(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyRequest, error) {
-	txn := s.transactions[requests.Tid]
+func (s *AftServer) Write(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyRequest, error) {
+	s.RunningTransactionLock.RLock()
+	txn := s.RunningTransactions[requests.Tid]
+	s.RunningTransactionLock.RUnlock()
+
 	resp := &pb.KeyRequest{Tid: requests.Tid}
 
 	for _, update := range requests.Pairs {
 		key := update.Key
 		txn.WriteSet = append(txn.WriteSet, key)
 
-		s.updateBuffer[requests.Tid] = append(s.updateBuffer[requests.Tid],
-			keyUpdate{key: key, tid: requests.Tid, value: update.Value})
+		s.UpdateBufferLock.Lock()
+		s.UpdateBuffer[requests.Tid] = append(s.UpdateBuffer[requests.Tid],
+			&keyUpdate{key: key, tid: requests.Tid, value: update.Value})
+		s.UpdateBufferLock.Unlock()
+
 		resp.Pairs = append(resp.Pairs, &pb.KeyRequest_KeyPair{Key: key})
 	}
 
 	return resp, nil
 }
 
-func (s *aftServer) Read(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyRequest, error) {
-	txn := s.transactions[requests.Tid]
+func (s *AftServer) Read(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyRequest, error) {
+	s.RunningTransactionLock.RLock()
+	txn := s.RunningTransactions[requests.Tid]
+	s.RunningTransactionLock.RUnlock()
+
 	resp := &pb.KeyRequest{Tid: requests.Tid}
 
 	for _, request := range requests.Pairs {
 		var returnValue []byte
 		// If the key is in the local update buffer, return it immediately.
 		found := false
-		if buffer, ok := s.updateBuffer[txn.Id]; ok {
+		s.UpdateBufferLock.RLock()
+		buffer, ok := s.UpdateBuffer[txn.Id]
+		s.UpdateBufferLock.RUnlock()
+
+		if ok {
 			for _, update := range buffer {
 				if update.key == request.Key {
 					returnValue = update.value
@@ -102,23 +94,30 @@ func (s *aftServer) Read(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyR
 		}
 
 		if !found {
-			key, err := s.consistencyManager.GetValidKeyVersion(request.Key, txn, txn.ReadSet, s.storageManager, s.readCache)
+			key, err := s.ConsistencyManager.GetValidKeyVersion(request.Key, txn, &s.ReadCache, s.ReadCacheLock, &s.KeyVersionIndex, s.KeyVersionIndexLock)
 			if err != nil {
 				return &pb.KeyRequest{}, err
 			}
 
 			// If we've read the key version before, return that version.
-			if val, ok := s.readCache[key]; ok {
+			s.ReadCacheLock.RLock()
+			val, ok := s.ReadCache[key]
+			s.ReadCacheLock.RUnlock()
+
+			if ok {
 				returnValue = val.Value
 			} else { // Otherwise, get the correct key version from storage.
-				kvPair, err := s.storageManager.Get(key)
+				kvPair, err := s.StorageManager.Get(key)
 
 				// If the GET request returns an error, that means the key was not
 				// accessible, so we return nil.
 				if err != nil {
 					return &pb.KeyRequest{}, err
 				} else { // Otherwise, add this key to our read cache.
-					s.readCache[key] = kvPair
+					s.ReadCacheLock.Lock()
+					s.ReadCache[key] = *kvPair // TODO This should take a pointer instead.
+					s.ReadCacheLock.Unlock()
+
 					returnValue = kvPair.Value
 				}
 			}
@@ -134,25 +133,33 @@ func (s *aftServer) Read(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyR
 	return resp, nil
 }
 
-func (s *aftServer) CommitTransaction(ctx context.Context, tag *pb.TransactionTag) (*pb.TransactionTag, error) {
+func (s *AftServer) CommitTransaction(ctx context.Context, tag *pb.TransactionTag) (*pb.TransactionTag, error) {
 	tid := tag.Id
-	txn := s.transactions[tid]
+	s.RunningTransactionLock.RLock()
+	txn := s.RunningTransactions[tid]
+	s.RunningTransactionLock.RUnlock()
 
-	ok := s.consistencyManager.ValidateTransaction(tid, txn.ReadSet, txn.WriteSet)
+	ok := s.ConsistencyManager.ValidateTransaction(tid, txn.ReadSet, txn.WriteSet)
 
 	if ok {
 		// Construct the set of keys that were written together to put into the KVS
 		// metadata.
-		cowrittenKeys := make([]string, len(s.updateBuffer[tid]))
-		for index, update := range s.updateBuffer[tid] {
+		s.UpdateBufferLock.RLock()
+		cowrittenKeys := make([]string, len(s.UpdateBuffer[tid]))
+		keyUpdates := make([]*keyUpdate, len(s.UpdateBuffer[tid]))
+
+		for index, update := range s.UpdateBuffer[tid] {
 			cowrittenKeys[index] = update.key
+			keyUpdates[index] = update
 		}
+
+		s.UpdateBufferLock.RUnlock()
 
 		// Write updates to storage manager.
 		success := true
-		for _, update := range s.updateBuffer[tid] {
-			key := s.consistencyManager.GetStorageKeyName(update.key, &txn)
-			val := pb.KeyValuePair{
+		for _, update := range keyUpdates {
+			key := s.ConsistencyManager.GetStorageKeyName(update.key, txn.Timestamp, tid)
+			val := &pb.KeyValuePair{
 				Key:           update.key,
 				Value:         update.value,
 				CowrittenKeys: cowrittenKeys,
@@ -160,7 +167,7 @@ func (s *aftServer) CommitTransaction(ctx context.Context, tag *pb.TransactionTa
 				Timestamp:     txn.Timestamp,
 			}
 
-			err := s.storageManager.Put(key, val)
+			err := s.StorageManager.Put(key, val)
 
 			if err != nil {
 				success = false
@@ -178,97 +185,85 @@ func (s *aftServer) CommitTransaction(ctx context.Context, tag *pb.TransactionTa
 		txn.Status = pb.TransactionStatus_ABORTED
 	}
 
-	err := s.storageManager.CommitTransaction(txn)
+	err := s.StorageManager.CommitTransaction(txn)
 	if err != nil {
 		return nil, err
 	}
 
 	// Move the transaction from the running transactions to the finished set.
-	delete(s.transactions, tid)
-	s.FinishedTransactions[tid] = txn
+	s.RunningTransactionLock.Lock()
+	delete(s.RunningTransactions, tid)
+	s.RunningTransactionLock.Unlock()
 
-	delete(s.updateBuffer, tid)
+	s.FinishedTransactionLock.Lock()
+	s.FinishedTransactions[tid] = txn
+	s.FinishedTransactionLock.Unlock()
+
+	s.UpdateBufferLock.Lock()
+	delete(s.UpdateBuffer, tid)
+	s.UpdateBufferLock.Unlock()
+
+	s.updateKeyVersionIndex(txn)
+
 	return &pb.TransactionTag{Id: tid, Status: txn.Status}, nil
 }
 
-func (s *aftServer) AbortTransaction(ctx context.Context, tag *pb.TransactionTag) (*pb.TransactionTag, error) {
+func (s *AftServer) AbortTransaction(ctx context.Context, tag *pb.TransactionTag) (*pb.TransactionTag, error) {
 	tid := tag.Id
-	txn := s.transactions[tid]
-	delete(s.updateBuffer, tid)
-	s.storageManager.AbortTransaction(s.transactions[tid])
+	s.RunningTransactionLock.RLock()
+	txn := s.RunningTransactions[tid]
+	s.RunningTransactionLock.RUnlock()
+
+	s.UpdateBufferLock.Lock()
+	delete(s.UpdateBuffer, tid)
+	s.UpdateBufferLock.Unlock()
+
+	s.StorageManager.AbortTransaction(txn)
 	txn.Status = pb.TransactionStatus_ABORTED
 
 	// Move the transaction from the running transactions to the finished set.
-	delete(s.transactions, tid)
+	s.RunningTransactionLock.Lock()
+	delete(s.RunningTransactions, tid)
+	s.RunningTransactionLock.Unlock()
+
+	s.FinishedTransactionLock.Lock()
 	s.FinishedTransactions[tid] = txn
+	s.FinishedTransactionLock.Unlock()
 
 	return &pb.TransactionTag{Id: tid, Status: pb.TransactionStatus_ABORTED}, nil
 }
 
-func (s *aftServer) UpdateMetadata(ctx context.Context, list *pb.TransactionList) (*empty.Empty, error) {
-	s.TransactionLock.Lock()
+func (s *AftServer) UpdateMetadata(ctx context.Context, list *pb.TransactionList) (*empty.Empty, error) {
+	s.FinishedTransactionLock.Lock()
 	for _, record := range list.Records {
-		s.FinishedTransactions[record.Id] = *record
+		s.FinishedTransactions[record.Id] = record
+		s.updateKeyVersionIndex(record)
 	}
-	s.TransactionLock.Unlock()
+	s.FinishedTransactionLock.Unlock()
 
 	return &empty.Empty{}, nil
+}
+
+func (s *AftServer) updateKeyVersionIndex(transaction *pb.TransactionRecord) {
+	s.KeyVersionIndexLock.Lock()
+	for _, key := range transaction.WriteSet {
+		kvName := s.ConsistencyManager.GetStorageKeyName(key, transaction.Timestamp, transaction.Id)
+
+		index, ok := s.KeyVersionIndex[key]
+		if !ok {
+			index = &[]string{}
+			s.KeyVersionIndex[key] = index
+		}
+
+		result := append(*index, kvName)
+		s.KeyVersionIndex[key] = &result
+	}
+	s.KeyVersionIndexLock.Unlock()
 }
 
 const (
 	port = ":7654"
 )
-
-func newAftServer() (*aftServer, *aftConfig) {
-	bts, err := ioutil.ReadFile("aft-config.yml")
-	if err != nil {
-		log.Fatal("Unable to read aft-config.yml. Please make sure that the config is properly configured and retry:\n%v", err)
-		os.Exit(1)
-	}
-
-	var config aftConfig
-	err = yaml.Unmarshal(bts, &config)
-	if err != nil {
-		log.Fatal("Unable to correctly parse aft-config.yml. Please check the config file and retry:\n%v", err)
-		os.Exit(2)
-	}
-
-	var consistencyManager consistency.ConsistencyManager
-	if config.ConsistencyType == "lww" {
-		consistencyManager = &consistency.LWWConsistencyManager{}
-	} else if config.ConsistencyType == "read-atomic" {
-		consistencyManager = &consistency.ReadAtomicConsistencyManager{}
-	} else {
-		log.Fatal("Unrecognized consistencyType %s. Valid types are: lww, read-atomic.", config.ConsistencyType)
-		os.Exit(3)
-	}
-
-	var storageManager storage.StorageManager
-	if config.StorageType == "s3" {
-		// TODO: This bucket path should be in the conf.
-		storageManager = storage.NewS3StorageManager("vsreekanti")
-	} else {
-		log.Fatal("Unrecognized storageType %s. Valid types are: s3.", config.ConsistencyType)
-		os.Exit(3)
-	}
-
-	uid, err := uuid.NewV4()
-	if err != nil {
-		log.Fatal("Unexpected error while generating UUID: %v", err)
-		os.Exit(1)
-	}
-
-	return &aftServer{
-		id:                   uid.String(),
-		transactions:         map[string]pb.TransactionRecord{},
-		updateBuffer:         map[string][]keyUpdate{},
-		consistencyManager:   consistencyManager,
-		storageManager:       storageManager,
-		readCache:            map[string]pb.KeyValuePair{},
-		FinishedTransactions: map[string]pb.TransactionRecord{},
-		TransactionLock:      &sync.Mutex{},
-	}, &config
-}
 
 func main() {
 	lis, err := net.Listen("tcp", port)
@@ -277,11 +272,11 @@ func main() {
 	}
 
 	server := grpc.NewServer()
-	aft, config := newAftServer()
+	aft, _ := NewAftServer()
 	pb.RegisterAftServer(server, aft)
 
 	// Start the multicast goroutine.
-	go MulticastRoutine(aft, config.ReplicaList)
+	// go MulticastRoutine(aft, config.ReplicaList)
 
 	if err = server.Serve(lis); err != nil {
 		log.Fatal("Could not start server on port %s: %v\n", port, err)
