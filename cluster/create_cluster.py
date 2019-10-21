@@ -88,7 +88,7 @@ if __name__ == '__main__':
     parser.add_argument('--conf', nargs='?', type=str,
                         help='The configuration file to start the cluster with'
                         + ' (optional)', dest='conf',
-                        default='../aft-config.yml')
+                        default='../conf/aft-base.yml')
     parser.add_argument('--ssh-key', nargs='?', type=str,
                         help='The SSH key used to configure and connect to ' +
                         'each node (optional)', dest='sshkey',

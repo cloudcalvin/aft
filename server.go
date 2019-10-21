@@ -39,7 +39,7 @@ type aftConfig struct {
 }
 
 func NewAftServer() (*AftServer, *aftConfig) {
-	bts, err := ioutil.ReadFile("aft-config.yml")
+	bts, err := ioutil.ReadFile("conf/aft-config.yml")
 	if err != nil {
 		log.Fatal("Unable to read aft-config.yml. Please make sure that the config is properly configured and retry:\n%v", err)
 		os.Exit(1)
