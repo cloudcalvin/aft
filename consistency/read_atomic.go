@@ -13,7 +13,7 @@ import (
 type ReadAtomicConsistencyManager struct{}
 
 const (
-	keyTemplate = "/data/%s/%d/%s"
+	keyTemplate = "data/%s/%d/%s"
 	// keyPrefix   = "/data/%s"
 )
 
@@ -44,6 +44,11 @@ func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
 		readCacheLock.RLock()
 		kvPair, _ := (*readCache)[fullName]
 		readCacheLock.RUnlock()
+
+		if kvPair.Timestamp == 0 {
+			fmt.Println(fullName)
+			fmt.Println(kvPair)
+		}
 
 		for _, cowritten := range kvPair.CowrittenKeys {
 			if key == cowritten {

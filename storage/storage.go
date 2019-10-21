@@ -4,7 +4,7 @@ import (
 	pb "github.com/vsreekanti/aft/proto/aft"
 )
 
-var transactionKey = "/transactions/%s-%d"
+var transactionKey = "transactions/%s-%d"
 
 type StorageManager interface {
 	// Start a new transaction with the execution ID passed in; this ID will be

@@ -23,9 +23,9 @@ func MulticastRoutine(server *AftServer, replicaList []string) {
 	clients := make([]pb.AftClient, len(replicaList))
 	for index, ip := range replicaList {
 		address := fmt.Sprintf(addressTemplate, ip, port)
-		conn, err := grpc.Dial(address)
+		conn, err := grpc.Dial(address, grpc.WithInsecure())
 		if err != nil {
-			log.Fatal("Unable to connect to replica %s:\n%v", ip, err)
+			log.Fatal(fmt.Sprintf("Unable to connect to replica %s:\n%v", ip, err))
 		}
 
 		clients[index] = pb.NewAftClient(conn)

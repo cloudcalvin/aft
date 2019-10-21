@@ -1,6 +1,6 @@
 consistencyType: read-atomic
-storageType: s3
+storageType: redis
 ipAddress: 127.0.0.1
-replicaList:
+replicaList: 
   - 127.0.0.1
-  - 127.0.0.1
+  - 127.0.0.2

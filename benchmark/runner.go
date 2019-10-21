@@ -59,6 +59,8 @@ func main() {
 	median, _ := stats.Median(latencies)
 	fifth, _ := stats.Percentile(latencies, 5.0)
 	nfifth, _ := stats.Percentile(latencies, 95.0)
+	first, _ := stats.Percentile(latencies, 1.0)
+	nninth, _ := stats.Percentile(latencies, 99.0)
 	totalThruput, _ := stats.Sum(thruputs)
 
 	if len(errors) > 0 {
@@ -68,6 +70,7 @@ func main() {
 	fmt.Printf("Number of errors: %d\n", len(errors))
 	fmt.Printf("Median latency: %f\n", median)
 	fmt.Printf("5th percentile/95th percentile: %f, %f\n", fifth, nfifth)
+	fmt.Printf("1th percentile/99th percentile: %f, %f\n", first, nninth)
 	fmt.Printf("Total throughput: %f\n", totalThruput)
 }
 

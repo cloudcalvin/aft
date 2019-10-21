@@ -58,18 +58,20 @@ func NewAftServer() (*AftServer, *aftConfig) {
 	} else if config.ConsistencyType == "read-atomic" {
 		consistencyManager = &consistency.ReadAtomicConsistencyManager{}
 	} else {
-		log.Fatal("Unrecognized consistencyType %s. Valid types are: lww, read-atomic.", config.ConsistencyType)
+		log.Fatal(fmt.Sprintf("Unrecognized consistencyType %s. Valid types are: lww, read-atomic.", config.ConsistencyType))
 		os.Exit(3)
 	}
 
+	// TODO: These paths should be in the conf.
 	var storageManager storage.StorageManager
 	if config.StorageType == "s3" {
-		// TODO: This bucket path should be in the conf.
 		storageManager = storage.NewS3StorageManager("vsreekanti")
 	} else if config.StorageType == "dynamo" {
 		storageManager = storage.NewDynamoStorageManager("AftData", "AftData")
+	} else if config.StorageType == "redis" {
+		storageManager = storage.NewRedisStorageManager("aft-test.kxmfgs.clustercfg.use1.cache.amazonaws.com:6379", "")
 	} else {
-		log.Fatal("Unrecognized storageType %s. Valid types are: s3, dynamo.", config.ConsistencyType)
+		log.Fatal(fmt.Sprintf("Unrecognized storageType %s. Valid types are: s3, dynamo, redis.", config.StorageType))
 		os.Exit(3)
 	}
 
@@ -96,7 +98,7 @@ func NewAftServer() (*AftServer, *aftConfig) {
 	}
 
 	// Retrieve the list of committed transactions
-	transactionKeys, _ := storageManager.List("/transactions")
+	transactionKeys, _ := storageManager.List("transactions")
 	for _, txnKey := range transactionKeys {
 		txnRecord, err := storageManager.GetTransaction(txnKey)
 		if err != nil {

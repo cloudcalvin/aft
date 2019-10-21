@@ -115,7 +115,7 @@ func (s *AftServer) Read(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyR
 					return &pb.KeyRequest{}, err
 				} else { // Otherwise, add this key to our read cache.
 					s.ReadCacheLock.Lock()
-					s.ReadCache[key] = *kvPair // TODO This should take a pointer instead.
+					s.ReadCache[key] = *kvPair
 					s.ReadCacheLock.Unlock()
 
 					returnValue = kvPair.Value
@@ -204,7 +204,6 @@ func (s *AftServer) CommitTransaction(ctx context.Context, tag *pb.TransactionTa
 	s.UpdateBufferLock.Unlock()
 
 	s.updateKeyVersionIndex(txn)
-
 	return &pb.TransactionTag{Id: tid, Status: txn.Status}, nil
 }
 
@@ -272,11 +271,11 @@ func main() {
 	}
 
 	server := grpc.NewServer()
-	aft, _ := NewAftServer()
+	aft, config := NewAftServer()
 	pb.RegisterAftServer(server, aft)
 
 	// Start the multicast goroutine.
-	// go MulticastRoutine(aft, config.ReplicaList)
+	go MulticastRoutine(aft, config.ReplicaList)
 
 	if err = server.Serve(lis); err != nil {
 		log.Fatal("Could not start server on port %s: %v\n", port, err)

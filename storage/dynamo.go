@@ -114,11 +114,6 @@ func (dynamo *DynamoStorageManager) Delete(key string) error {
 }
 
 func (dynamo *DynamoStorageManager) List(prefix string) ([]string, error) {
-	// Append a '/' to all prefixes if necessary.
-	if prefix[0] != '/' {
-		prefix = fmt.Sprintf("/%s", prefix)
-	}
-
 	expr := fmt.Sprintf("begins_with(DataKey, :p)")
 	additionalKeys := true
 

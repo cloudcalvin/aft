@@ -66,19 +66,9 @@ func (s3 *S3StorageManager) Get(key string) (*pb.KeyValuePair, error) {
 		return result, err
 	}
 
-	numBytes := *getObjectOutput.ContentLength
-	body := make([]byte, numBytes)
-	n, err := getObjectOutput.Body.Read(body)
-
-	if int64(n) != numBytes && err != nil {
-		return result, err
-	}
-
-	if int64(n) < numBytes {
-		err = proto.Unmarshal(body[:n], result)
-	} else {
-		err = proto.Unmarshal(body, result)
-	}
+	body := new(bytes.Buffer)
+	_, err = body.ReadFrom(getObjectOutput.Body)
+	err = proto.Unmarshal(body.Bytes(), result)
 
 	return result, err
 }
@@ -96,19 +86,9 @@ func (s3 *S3StorageManager) GetTransaction(transactionKey string) (*pb.Transacti
 		return result, err
 	}
 
-	numBytes := *getObjectOutput.ContentLength
-	body := make([]byte, numBytes)
-	n, err := getObjectOutput.Body.Read(body)
-
-	if int64(n) != numBytes && err != nil {
-		return result, err
-	}
-
-	if int64(n) < numBytes {
-		err = proto.Unmarshal(body[:n], result)
-	} else {
-		err = proto.Unmarshal(body, result)
-	}
+	body := new(bytes.Buffer)
+	_, err = body.ReadFrom(getObjectOutput.Body)
+	err = proto.Unmarshal(body.Bytes(), result)
 
 	return result, err
 }
@@ -141,25 +121,29 @@ func (s3 *S3StorageManager) Delete(key string) error {
 }
 
 func (s3 *S3StorageManager) List(prefix string) ([]string, error) {
-	// Remove any leading slashes because S3 doesn't like those.
-	if prefix[0] == '/' {
-		prefix = prefix[1:len(prefix)]
-	}
-
 	input := &awss3.ListObjectsV2Input{
 		Bucket: &s3.bucket,
 		Prefix: &prefix,
 	}
 
-	result, err := s3.s3Client.ListObjectsV2(input)
-	if err != nil {
-		return nil, err
-	}
+	additionalKeys := true
+	returnValue := []string{}
 
-	returnValue := make([]string, len(result.Contents))
+	for additionalKeys {
+		result, err := s3.s3Client.ListObjectsV2(input)
+		if err != nil {
+			return nil, err
+		}
 
-	for index, val := range result.Contents {
-		returnValue[index] = *val.Key
+		for _, val := range result.Contents {
+			returnValue = append(returnValue, *val.Key)
+		}
+
+		if *result.IsTruncated {
+			input.ContinuationToken = result.NextContinuationToken
+		} else {
+			additionalKeys = false
+		}
 	}
 
 	return returnValue, nil
