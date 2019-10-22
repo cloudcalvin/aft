@@ -29,7 +29,7 @@ def main():
         if len(splits) > 3:
             cmd.append(('--benchmarkType %s' % splits[3]))
 
-        result = subprocess.run(, stdout=subprocess.PIPE)
+        result = subprocess.run(cmd, stdout=subprocess.PIPE)
 
     if result.returncode == 0:
             output = result.stdout
