@@ -31,12 +31,17 @@ def main():
 
         result = subprocess.run(cmd, stdout=subprocess.PIPE)
 
-    if result.returncode == 0:
+        if len(splits) > 3:
+            cmd.append(('--benchmarkType %s' % splits[3]))
+
+        result = subprocess.run(cmd, stdout=subprocess.PIPE)
+
+        if result.returncode == 0:
             output = result.stdout
         else:
             output = result.stdout + '\n' + result.stderr
 
-        benchmark_socket.send_string(output)
+            benchmark_socket.send_string(output)
 
 if __name__ == '__main__':
     main()
