@@ -19,7 +19,7 @@ import os
 import boto3
 import kubernetes as k8s
 
-from hydro.shared import util
+import util
 
 ec2_client = boto3.client('ec2', os.getenv('AWS_REGION', 'us-east-1'))
 

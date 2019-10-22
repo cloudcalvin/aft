@@ -2,6 +2,11 @@
 
 *.pb.go
 
+# PYTHON FILES
+
+*pyc
+__pycache__
+
 # EXECUTABLES
 
 aft

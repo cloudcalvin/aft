@@ -29,80 +29,49 @@ spec:
     spec:
       nodeSelector:
         role: benchmark
+      hostNetwork: True
       containers:
       - name: benchmark-1
-        image: vsreekanti/droplet
+        image: vsreekanti/aft
         env: 
+        - name: REPLICA_IPS
+          value: REPLICA_IPS_DUMMY
+        - name: REPO_BRANCH
+          value: master
         - name: ROLE
-          value: benchmark
-        - name: FUNCTION_ADDR
-          value: FUNCTION_ADDR_DUMMY
+          value: bench
         - name: THREAD_ID
           value: "0"
-        - name: MGMT_IP
-          value: ""
-        - name: REPO_ORG
-          value: vsreekanti
-        - name: REPO_BRANCH
-          value: retwis
-        - name: ANNA_REPO_ORG
-          value: vsreekanti
-        - name: ANNA_REPO_BRANCH
-          value: nsdi-experiments
       - name: benchmark-2
-        image: vsreekanti/droplet
+        image: vsreekanti/aft
         env: 
+        - name: REPLICA_IPS
+          value: REPLICA_IPS_DUMMY
+        - name: REPO_BRANCH
+          value: master
         - name: ROLE
-          value: benchmark
-        - name: FUNCTION_ADDR
-          value: FUNCTION_ADDR_DUMMY
+          value: bench
         - name: THREAD_ID
           value: "1"
-        - name: MGMT_IP
-          value: ""
-        - name: REPO_ORG
-          value: vsreekanti
-        - name: REPO_BRANCH
-          value: retwis
-        - name: ANNA_REPO_ORG
-          value: vsreekanti
-        - name: ANNA_REPO_BRANCH
-          value: nsdi-experiments
       - name: benchmark-3
-        image: vsreekanti/droplet
+        image: vsreekanti/aft
         env: 
+        - name: REPLICA_IPS
+          value: REPLICA_IPS_DUMMY
+        - name: REPO_BRANCH
+          value: master
         - name: ROLE
-          value: benchmark
-        - name: FUNCTION_ADDR
-          value: FUNCTION_ADDR_DUMMY
+          value: bench
         - name: THREAD_ID
           value: "2"
-        - name: MGMT_IP
-          value: ""
-        - name: REPO_ORG
-          value: vsreekanti
-        - name: REPO_BRANCH
-          value: retwis
-        - name: ANNA_REPO_ORG
-          value: vsreekanti
-        - name: ANNA_REPO_BRANCH
-          value: nsdi-experiments
       - name: benchmark-4
-        image: vsreekanti/droplet
+        image: vsreekanti/aft
         env: 
+        - name: REPLICA_IPS
+          value: REPLICA_IPS_DUMMY
+        - name: REPO_BRANCH
+          value: master
         - name: ROLE
-          value: benchmark
-        - name: FUNCTION_ADDR
-          value: FUNCTION_ADDR_DUMMY
+          value: bench
         - name: THREAD_ID
           value: "3"
-        - name: MGMT_IP
-          value: ""
-        - name: REPO_ORG
-          value: vsreekanti
-        - name: REPO_BRANCH
-          value: retwis
-        - name: ANNA_REPO_ORG
-          value: vsreekanti
-        - name: ANNA_REPO_BRANCH
-          value: nsdi-experiments

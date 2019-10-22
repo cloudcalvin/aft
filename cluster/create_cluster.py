@@ -19,14 +19,14 @@ import os
 
 import boto3
 
-from hydro.cluster.add_nodes import add_nodes
-from hydro.shared import util
+from add_nodes import add_nodes
+import util
 
 ec2_client = boto3.client('ec2', os.getenv('AWS_REGION', 'us-east-1'))
 
 
-def create_cluster(replica_count, cfile, ssh_key, cluster_name, kops_bucket,
-                   aws_key_id, aws_key):
+def create_cluster(replica_count, bench_count, cfile, ssh_key, cluster_name,
+                   kops_bucket, aws_key_id, aws_key):
     util.run_process(['./create_cluster_object.sh', kops_bucket, ssh_key])
 
     client, apps_client = util.init_k8s()
@@ -36,14 +36,15 @@ def create_cluster(replica_count, cfile, ssh_key, cluster_name, kops_bucket,
 
     # Wait until the monitoring pod is finished creating to get its IP address
     # and then copy KVS config into the monitoring pod.
+    prefix = './'
     print('Creating %d Aft replicas...' % (replica_count))
-    add_nodes(client, apps_client, cfile, ['aft'], [replica_count], True,
-              prefix)
+    add_nodes(client, apps_client, cfile, ['aft'], [replica_count], aws_key_id,
+              aws_key, True, prefix)
     util.get_pod_ips(client, 'role=aft')
 
     print('Adding %d benchmark nodes...' % (bench_count))
-    add_nodes(client, apps_client, cfile, ['benchmark'], [bench_count], True,
-              prefix)
+    add_nodes(client, apps_client, cfile, ['benchmark'], [bench_count],
+              create=True, prefix=prefix)
 
     print('Finished creating all pods...')
 

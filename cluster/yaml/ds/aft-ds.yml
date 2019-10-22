@@ -37,3 +37,11 @@ spec:
         env: 
         - name: REPLICA_IPS
           value: REPLICA_IPS_DUMMY
+        - name: REPO_BRANCH
+          value: master
+        - name: AWS_ACCESS_KEY_ID
+          value: ACCESS_KEY_ID_DUMMY
+        - name: AWS_SECRET_ACCESS_KEY
+          value: AWS_SECRET_KEY_DUMMY
+        - name: ROLE
+          value: aft
