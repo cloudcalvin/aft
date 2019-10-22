@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -24,19 +25,40 @@ import (
 var numRequests = flag.Int("numRequests", 1000, "The total number of requests in the benchmark")
 var numThreads = flag.Int("numThreads", 10, "The total number of parallel threads in the benchmark")
 var numKeys = flag.Int64("numKeys", 1000, "The number of keys to operate over")
+var replicaList = flag.String("replicaList", "", "A comma separated list of addresses of Aft replicas")
+var benchmarkType = flag.String("benchmarkType", "", "The type of benchmark to run. Options are aft, plain, and local.")
 
 func main() {
 	flag.Parse()
 
+	if *benchmarkType == "" {
+		fmt.Println("No benchmarkType provided. Defaulting to aft...")
+		*benchmarkType = "aft"
+	}
+
+	if (*benchmarkType == "aft" || *benchmarkType == "local") && *replicaList == "" {
+		fmt.Printf("No Aft replicas provided for benchmark of type %s. Please use the --replicaList flag.\n", *benchmarkType)
+		os.Exit(1)
+	}
+
+	replicas := strings.Split(*replicaList, ",")
+
 	requestsPerThread := int64(*numRequests / *numThreads)
-	fmt.Printf("Starting benchmark with %d requests across %d threads...\n", *numRequests, *numThreads)
+	fmt.Printf("Starting benchmark type %s with %d requests across %d threads...\n", *benchmarkType, *numRequests, *numThreads)
 
 	latencyChannel := make(chan []float64)
 	errorChannel := make(chan []string)
 	totalTimeChannel := make(chan float64)
 
 	for tid := 0; tid < *numThreads; tid++ {
-		go benchmark(tid, requestsPerThread, latencyChannel, errorChannel, totalTimeChannel)
+		switch *benchmarkType {
+		case "aft":
+			go benchmark(tid, requestsPerThread, replicas, latencyChannel, errorChannel, totalTimeChannel)
+		case "plain":
+			go benchmarkPlain(tid, requestsPerThread, latencyChannel, errorChannel, totalTimeChannel)
+		case "local":
+			go benchmarkLocal(tid, requestsPerThread, replicas, latencyChannel, errorChannel, totalTimeChannel)
+		}
 	}
 
 	latencies := []float64{}
@@ -73,9 +95,12 @@ func main() {
 	fmt.Printf("Total throughput: %f\n", totalThruput)
 }
 
+// Runs a benchmark by invoking the aft-test Lambda function, which uses Aft
+// for read atomic consistency.
 func benchmark(
 	tid int,
 	threadRequestCount int64,
+	replicas []string,
 	latencyChannel chan []float64,
 	errorChannel chan []string,
 	totalTimeChannel chan float64,
@@ -88,8 +113,17 @@ func benchmark(
 		&aws.Config{Region: aws.String(endpoints.UsEast1RegionID)},
 	)
 
-	pyld := map[string]int{"count": 1}
+	type lambdaInput struct {
+		count    int
+		replicas []string
+	}
+
+	pyld := lambdaInput{
+		count:    1,
+		replicas: replicas,
+	}
 	payload, _ := json.Marshal(pyld)
+
 	input := &lambda.InvokeInput{
 		FunctionName:   aws.String("aft-test"),
 		Payload:        payload,
@@ -102,7 +136,6 @@ func benchmark(
 		requestStart := time.Now()
 		response, err := lambdaClient.Invoke(input)
 		requestEnd := time.Now()
-
 
 		// Log the elapsed request time.
 		latencies = append(latencies, requestEnd.Sub(requestStart).Seconds())
@@ -128,6 +161,10 @@ func benchmark(
 	totalTimeChannel <- totalTime
 }
 
+// A benchmark that calls either the ddb-txn or the no-aft functions. The
+// ddb-txn Lambda invokes DynamoDB in transaction mode, and the no-aft function
+// talks directly to the underlying storage system. Both functions report back
+// inconsistencies observed.
 func benchmarkPlain(
 	tid int,
 	threadRequestCount int64,
@@ -194,9 +231,12 @@ func benchmarkPlain(
 	totalTimeChannel <- totalTime
 }
 
+// A function that uses a Go gRPC client to interact directly with Aft rather
+// than using a Lambda.
 func benchmarkLocal(
 	tid int,
 	threadRequestCount int64,
+	replicas []string,
 	latencyChannel chan []float64,
 	errorChannel chan []string,
 	totalTimeChannel chan float64,
@@ -204,12 +244,18 @@ func benchmarkLocal(
 	errors := []string{}
 	latencies := []float64{}
 
-	conn, err := grpc.Dial("18.232.50.191:7654", grpc.WithInsecure())
-	if err != nil {
-		fmt.Printf("Unexpected error:\n%v\n", err)
-		os.Exit(1)
+	clients := []*pb.AftClient{}
+	for _, replica := range replicas {
+		conn, err := grpc.Dial(fmt.Sprint("%s:7654", replica), grpc.WithInsecure())
+		if err != nil {
+			fmt.Printf("Unexpected error:\n%v\n", err)
+			os.Exit(1)
+		}
+
+		client := pb.NewAftClient(conn)
+		clients = append(clients, &client)
+		// defer conn.Close()
 	}
-	defer conn.Close()
 
 	// Generate a new random source and create a Zipfian distribution.
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -217,7 +263,6 @@ func benchmarkLocal(
 
 	writeData := make([]byte, 4096)
 	r.Read(writeData)
-	client := pb.NewAftClient(conn)
 
 	requestId := int64(0)
 	benchStart := time.Now()
@@ -229,7 +274,8 @@ func benchmarkLocal(
 		writeCount := 2
 
 		requestStart := time.Now()
-		tag, _ := client.StartTransaction(context.Background(), &empty.Empty{})
+		client := clients[rand.Intn(len(clients))] // Pick a client to use at random.
+		tag, _ := (*client).StartTransaction(context.Background(), &empty.Empty{})
 
 		for keyId := 0; keyId < keyCount; keyId++ {
 			key := strconv.FormatUint(zipf.Uint64(), 10)
@@ -242,14 +288,14 @@ func benchmarkLocal(
 			// Do the two writes first, then do the 4 reads.
 			if keyId < writeCount {
 				pair.Value = writeData
-				_, err = client.Write(context.Background(), update)
+				_, err = (*client).Write(context.Background(), update)
 
 				if err != nil {
 					errored = true
 					break
 				}
 			} else {
-				_, err = client.Read(context.Background(), update)
+				_, err = (*client).Read(context.Background(), update)
 
 				if err != nil {
 					errored = true
@@ -259,7 +305,7 @@ func benchmarkLocal(
 		}
 
 		if !errored {
-			tag, err = client.CommitTransaction(context.Background(), tag)
+			tag, err = (*client).CommitTransaction(context.Background(), tag)
 		}
 		requestEnd := time.Now()
 
