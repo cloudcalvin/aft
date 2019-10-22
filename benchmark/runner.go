@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"math/rand"
 	"os"
 	"strconv"
@@ -29,7 +30,16 @@ var replicaList = flag.String("replicaList", "", "A comma separated list of addr
 var benchmarkType = flag.String("benchmarkType", "", "The type of benchmark to run. Options are aft, plain, and local.")
 
 func main() {
+	// Parse command line flags.
 	flag.Parse()
+
+	// Setup the logging infrastructure.
+	f, err := os.OpenFile("log.txt", os.O_RDWR|os.O_CREATE, 0755)
+	if err != nil {
+		fmt.Println("Could not open log file:\n", err)
+		os.Exit(1)
+	}
+	log.SetOutput(f)
 
 	if *benchmarkType == "" {
 		fmt.Println("No benchmarkType provided. Defaulting to aft...")
@@ -114,15 +124,15 @@ func benchmark(
 	)
 
 	type lambdaInput struct {
-		count    int
-		replicas []string
+		Count    int      `json:"count"`
+		Replicas []string `json:"replicas"`
 	}
 
 	pyld := lambdaInput{
-		count:    1,
-		replicas: replicas,
+		Count:    1,
+		Replicas: replicas,
 	}
-	payload, _ := json.Marshal(pyld)
+	payload, _ := json.Marshal(&pyld)
 
 	input := &lambda.InvokeInput{
 		FunctionName:   aws.String("aft-test"),
@@ -133,6 +143,10 @@ func benchmark(
 	benchStart := time.Now()
 	requestId := int64(0)
 	for ; requestId < threadRequestCount; requestId++ {
+		if requestId%10 == 0 {
+			log.Println(fmt.Sprintf("Running request %d...", requestId))
+		}
+
 		requestStart := time.Now()
 		response, err := lambdaClient.Invoke(input)
 		requestEnd := time.Now()
@@ -146,10 +160,11 @@ func benchmark(
 			errors = append(errors, err.Error())
 		} else {
 			// Next, we try to parse the response.
-			bts := response.Payload
+			bts := string(response.Payload)
 
-			runtimes := []float64{}
-			err = json.Unmarshal(bts, &runtimes)
+			if !strings.Contains(bts, "Success") {
+				errors = append(errors, bts)
+			}
 		}
 	}
 
@@ -211,8 +226,7 @@ func benchmarkPlain(
 			err = json.Unmarshal(bts, &inconsistencies)
 
 			if len(inconsistencies) < 2 {
-				fmt.Println(string(bts))
-				fmt.Println(err)
+				errors = append(errors, string(bts))
 			} else {
 				wrInconsistencies += inconsistencies[0]
 				rrInconsistencies += inconsistencies[1]

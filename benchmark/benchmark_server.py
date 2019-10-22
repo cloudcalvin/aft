@@ -21,22 +21,25 @@ def main():
 
         cmd = [
             './benchmark',
-            ('--numThreads %d' % num_threads),
-            ('--numRequests %d' % num_requests),
-            ('--replicaList %s' % replicas)
+            '-numThreads',  str(num_threads),
+            '-numRequests', str(num_requests),
+            '-replicaList', replicas
         ]
 
         if len(splits) > 3:
-            cmd.append(('--benchmarkType %s' % splits[3]))
+            cmd.append('-benchmarkType')
+            cmd.append(splits[3])
 
-        result = subprocess.run(cmd, stdout=subprocess.PIPE)
+        result = subprocess.run(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE)
 
         if result.returncode == 0:
-            output = result.stdout
+            output = str(result.stdout, 'utf-8')
         else:
-            output = result.stdout + '\n' + result.stderr
+            output = str(result.stdout, 'utf-8') + '\n' + str(result.stderr,
+                                                              'utf-8')
 
-            benchmark_socket.send_string(output)
+        benchmark_socket.send_string(output)
 
 if __name__ == '__main__':
     main()

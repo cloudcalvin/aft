@@ -18,30 +18,31 @@ def main():
                         required=True)
     parser.add_argument('-tp', '--threadPerServer', nargs=1, type=int,
                         metavar='U', help='The number of benchmark servers' +
-                        'per machine to contact', dest='tpm' required=True)
+                        'per machine to contact', dest='tpm', required=True)
 
     args = parser.parse_args()
 
     servers = []
     with open('benchmarks.txt') as f:
-        servers.append(f.readline())
+        servers.append(f.readline().strip())
 
-    message = ('%d:%d:%s') % (args.threads[0], args.threads[0] *
-                              args.requests[0], args.replicas)
+    message = ('%d:%d:%s:aft') % (args.threads[0], args.threads[0] *
+                              args.requests[0], args.replicas[0])
 
     conns = []
     context = zmq.Context(1)
     for server in servers:
         for i in range(args.tpm[0]):
             conn = context.socket(zmq.REQ)
-            conn.connect('tcp://%s:%d' % (server, 8000 + i))
+            address = ('tcp://%s:%d') % (server, 8000 + i)
+            conn.connect(address)
             conn.send_string(message)
 
             conns.append(conn)
 
     for conn in conns:
         response = conn.recv_string()
-        print(response)
+        print(str(response))
 
     print('Finished!')
 

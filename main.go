@@ -233,31 +233,34 @@ func (s *AftServer) AbortTransaction(ctx context.Context, tag *pb.TransactionTag
 }
 
 func (s *AftServer) UpdateMetadata(ctx context.Context, list *pb.TransactionList) (*empty.Empty, error) {
-	s.FinishedTransactionLock.Lock()
 	for _, record := range list.Records {
+		s.FinishedTransactionLock.Lock()
 		s.FinishedTransactions[record.Id] = record
+		s.FinishedTransactionLock.Unlock()
+
 		s.updateKeyVersionIndex(record)
 	}
-	s.FinishedTransactionLock.Unlock()
 
 	return &empty.Empty{}, nil
 }
 
 func (s *AftServer) updateKeyVersionIndex(transaction *pb.TransactionRecord) {
-	s.KeyVersionIndexLock.Lock()
 	for _, key := range transaction.WriteSet {
 		kvName := s.ConsistencyManager.GetStorageKeyName(key, transaction.Timestamp, transaction.Id)
 
+		s.KeyVersionIndexLock.RLock()
 		index, ok := s.KeyVersionIndex[key]
+		s.KeyVersionIndexLock.RUnlock()
 		if !ok {
 			index = &[]string{}
 			s.KeyVersionIndex[key] = index
 		}
 
 		result := append(*index, kvName)
+		s.KeyVersionIndexLock.Lock()
 		s.KeyVersionIndex[key] = &result
+		s.KeyVersionIndexLock.Unlock()
 	}
-	s.KeyVersionIndexLock.Unlock()
 }
 
 const (
@@ -275,7 +278,7 @@ func main() {
 	pb.RegisterAftServer(server, aft)
 
 	// Start the multicast goroutine.
-	go MulticastRoutine(aft, config.ReplicaList)
+	go MulticastRoutine(aft, config.IpAddress, config.ReplicaList)
 
 	if err = server.Serve(lis); err != nil {
 		log.Fatal("Could not start server on port %s: %v\n", port, err)
