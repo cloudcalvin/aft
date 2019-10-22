@@ -57,4 +57,10 @@ echo "replicaList:" >> conf/aft-config.yml
 echo "$LST" >> conf/aft-config.yml
 
 # Start the process.
-./aft
+if [[ "$ROLE" = "aft" ]]; do
+  ./aft
+elif [[ "$ROLE" = "bench" ]]
+  cd $AFT_HOME/benchmark
+  go build
+  python3 benchmark_server.py
+done
