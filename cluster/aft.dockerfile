@@ -31,7 +31,7 @@ RUN apt-get update
 RUN apt-get install -y software-properties-common
 RUN add-apt-repository -y ppa:longsleep/golang-backports
 RUN apt-get update
-RUN apt-get install -y golang-go wget unzip git ca-certificates
+RUN apt-get install -y golang-go wget unzip git ca-certificates net-tools
 
 # Updates certificates, so go get works.
 RUN touch /a && rm /a
@@ -48,7 +48,7 @@ RUN git clone https://github.com/vsreekanti/aft
 WORKDIR $AFT_HOME
 
 # Install required Go dependencies.
-RUN go get -u -v google.golang.org/grpc
+RUN go get -u google.golang.org/grpc
 RUN go get -u github.com/golang/protobuf/protoc-gen-go
 ENV PATH $PATH:$GOPATH/bin
 RUN which protoc-gen-go
@@ -56,8 +56,10 @@ RUN which protoc-gen-go
 # Fetch the most recent version of the code and install dependencies.
 WORKDIR $AFT_HOME/proto/aft
 RUN protoc -I . aft.proto --go_out=plugins=grpc:.
-RUN go get -d ./...
+WORKDIR $AFT_HOME
+RUN go get -u ./...
 
+WORKDIR /
 COPY start-aft.sh /start-aft.sh
 
 CMD bash start-aft.sh

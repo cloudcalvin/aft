@@ -8,7 +8,6 @@ import (
 	"math/rand"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -37,7 +36,7 @@ func main() {
 	totalTimeChannel := make(chan float64)
 
 	for tid := 0; tid < *numThreads; tid++ {
-		go benchmarkLocal(tid, requestsPerThread, latencyChannel, errorChannel, totalTimeChannel)
+		go benchmark(tid, requestsPerThread, latencyChannel, errorChannel, totalTimeChannel)
 	}
 
 	latencies := []float64{}
@@ -68,9 +67,9 @@ func main() {
 	}
 
 	fmt.Printf("Number of errors: %d\n", len(errors))
-	fmt.Printf("Median latency: %f\n", median)
-	fmt.Printf("5th percentile/95th percentile: %f, %f\n", fifth, nfifth)
-	fmt.Printf("1th percentile/99th percentile: %f, %f\n", first, nninth)
+	fmt.Printf("Median latency: %.6f\n", median)
+	fmt.Printf("5th percentile/95th percentile: %.6f, %.6f\n", fifth, nfifth)
+	fmt.Printf("1st percentile/99th percentile: %.6f, %.6f\n", first, nninth)
 	fmt.Printf("Total throughput: %f\n", totalThruput)
 }
 
@@ -89,7 +88,8 @@ func benchmark(
 		&aws.Config{Region: aws.String(endpoints.UsEast1RegionID)},
 	)
 
-	payload, _ := json.Marshal("{}")
+	pyld := map[string]int{"count": 1}
+	payload, _ := json.Marshal(pyld)
 	input := &lambda.InvokeInput{
 		FunctionName:   aws.String("aft-test"),
 		Payload:        payload,
@@ -103,8 +103,9 @@ func benchmark(
 		response, err := lambdaClient.Invoke(input)
 		requestEnd := time.Now()
 
+
 		// Log the elapsed request time.
-		latencies = append(latencies, float64(requestEnd.Sub(requestStart).Milliseconds()))
+		latencies = append(latencies, requestEnd.Sub(requestStart).Seconds())
 
 		// First, we check if the request itself returned an error. This should be
 		// very unlikely.
@@ -113,15 +114,77 @@ func benchmark(
 		} else {
 			// Next, we try to parse the response.
 			bts := response.Payload
-			// Finally, we check if the function itself returned Success or an
-			// error.
-			result := string(bts)
 
-			if !strings.Contains(result, "Success") {
-				errors = append(errors, result)
+			runtimes := []float64{}
+			err = json.Unmarshal(bts, &runtimes)
+		}
+	}
+
+	benchEnd := time.Now()
+	totalTime := benchEnd.Sub(benchStart).Seconds()
+
+	latencyChannel <- latencies
+	errorChannel <- errors
+	totalTimeChannel <- totalTime
+}
+
+func benchmarkPlain(
+	tid int,
+	threadRequestCount int64,
+	latencyChannel chan []float64,
+	errorChannel chan []string,
+	totalTimeChannel chan float64,
+) {
+	errors := []string{}
+	latencies := []float64{}
+	rrInconsistencies := 0
+	wrInconsistencies := 0
+
+	lambdaClient := lambda.New(
+		session.New(),
+		&aws.Config{Region: aws.String(endpoints.UsEast1RegionID)},
+	)
+
+	pyld := map[string]int{"count": 1}
+	payload, _ := json.Marshal(pyld)
+	input := &lambda.InvokeInput{
+		FunctionName:   aws.String("ddb-txn"),
+		Payload:        payload,
+		InvocationType: aws.String("RequestResponse"),
+	}
+
+	benchStart := time.Now()
+	requestId := int64(0)
+	for ; requestId < threadRequestCount; requestId++ {
+		requestStart := time.Now()
+		response, err := lambdaClient.Invoke(input)
+		requestEnd := time.Now()
+
+		// Log the elapsed request time.
+		latencies = append(latencies, float64(requestEnd.Sub(requestStart).Seconds()))
+
+		// First, we check if the request itself returned an error. This should be
+		// very unlikely.
+		if err != nil {
+			errors = append(errors, err.Error())
+		} else {
+			// Next, we try to parse the response.
+			bts := response.Payload
+			inconsistencies := []int{}
+			err = json.Unmarshal(bts, &inconsistencies)
+
+			if len(inconsistencies) < 2 {
+				fmt.Println(string(bts))
+				fmt.Println(err)
+			} else {
+				wrInconsistencies += inconsistencies[0]
+				rrInconsistencies += inconsistencies[1]
 			}
 		}
 	}
+
+	fmt.Println("Write-read inconsistencies: ", wrInconsistencies)
+	fmt.Println("Read-read inconsistencies: ", rrInconsistencies)
 
 	benchEnd := time.Now()
 	totalTime := benchEnd.Sub(benchStart).Seconds()
@@ -148,8 +211,12 @@ func benchmarkLocal(
 	}
 	defer conn.Close()
 
+	// Generate a new random source and create a Zipfian distribution.
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	zipf := rand.NewZipf(r, 1.1, 1.0, 999)
+
 	writeData := make([]byte, 4096)
-	rand.Read(writeData)
+	r.Read(writeData)
 	client := pb.NewAftClient(conn)
 
 	requestId := int64(0)
@@ -158,29 +225,22 @@ func benchmarkLocal(
 
 	for ; requestId < threadRequestCount; requestId++ {
 		var err error
-		keyCount := rand.Int31n(10) // Set the number of keys accessed in this txn.
+		keyCount := 6 // Set the number of keys accessed in this txn.
+		writeCount := 2
 
 		requestStart := time.Now()
-		tag, err := client.StartTransaction(context.Background(), &empty.Empty{})
-		if tag == nil {
-			fmt.Println("TAG IS NIL")
-			fmt.Println(err)
-		}
+		tag, _ := client.StartTransaction(context.Background(), &empty.Empty{})
 
-		keyId := int32(0)
-		for ; keyId < keyCount; keyId++ {
-			write := rand.Float32() < 0.20
-			key := strconv.FormatInt(rand.Int63n(*numKeys), 10)
+		for keyId := 0; keyId < keyCount; keyId++ {
+			key := strconv.FormatUint(zipf.Uint64(), 10)
 
-			if tag == nil {
-				fmt.Println("TAG IS NIL ", tag)
-			}
 			update := &pb.KeyRequest{Tid: tag.Id}
 			pair := &pb.KeyRequest_KeyPair{Key: key}
 
 			update.Pairs = append(update.Pairs, pair)
 
-			if write {
+			// Do the two writes first, then do the 4 reads.
+			if keyId < writeCount {
 				pair.Value = writeData
 				_, err = client.Write(context.Background(), update)
 
@@ -206,7 +266,7 @@ func benchmarkLocal(
 		if err != nil {
 			errors = append(errors, err.Error())
 		} else {
-			latencies = append(latencies, float64(requestEnd.Sub(requestStart).Milliseconds()))
+			latencies = append(latencies, float64(requestEnd.Sub(requestStart).Seconds()))
 		}
 	}
 
