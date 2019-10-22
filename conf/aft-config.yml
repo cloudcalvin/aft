@@ -1,5 +1,5 @@
 consistencyType: read-atomic
-storageType: redis
+storageType: dynamo
 ipAddress: 127.0.0.1
 replicaList: 
   - 127.0.0.1

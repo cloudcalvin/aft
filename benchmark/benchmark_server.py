@@ -17,12 +17,19 @@ def main():
         splits = command.split(':')
         num_threads = int(splits[0])
         num_requests = int(splits[1])
+        replicas = splits[2]
 
-        result = subprocess.run([
+        cmd = [
             './benchmark',
             ('--numThreads %d' % num_threads),
-            ('--numRequests %d' % num_requests)
-        ], stdout=subprocess.PIPE)
+            ('--numRequests %d' % num_requests),
+            ('--replicaList %s' % replicas)
+        ]
+
+        if len(splits) > 3:
+            cmd.append(('--benchmarkType %s' % splits[3]))
+
+        result = subprocess.run(, stdout=subprocess.PIPE)
 
     if result.returncode == 0:
             output = result.stdout
