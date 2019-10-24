@@ -31,20 +31,21 @@ def create_cluster(replica_count, bench_count, cfile, ssh_key, cluster_name,
 
     client, apps_client = util.init_k8s()
 
-    os.system('cp %s aft-config.yml' % cfile)
-    kubecfg = os.path.join(os.environ['HOME'], '.kube/config')
+    # TODO: create management pod
+    management_ip = '18.232.50.191'
 
+    os.system('cp %s aft-config.yml' % cfile)
     # Wait until the monitoring pod is finished creating to get its IP address
     # and then copy KVS config into the monitoring pod.
     prefix = './'
     print('Creating %d Aft replicas...' % (replica_count))
-    add_nodes(client, apps_client, cfile, ['aft'], [replica_count], aws_key_id,
-              aws_key, True, prefix)
+    add_nodes(client, apps_client, cfile, ['aft'], [replica_count],
+              management_ip, aws_key_id, aws_key, True, prefix)
     util.get_pod_ips(client, 'role=aft')
 
     print('Adding %d benchmark nodes...' % (bench_count))
     add_nodes(client, apps_client, cfile, ['benchmark'], [bench_count],
-              create=True, prefix=prefix)
+              management_ip, aws_key_id, aws_key, True, prefix)
 
     print('Finished creating all pods...')
 
@@ -57,11 +58,25 @@ def create_cluster(replica_count, bench_count, cfile, ssh_key, cluster_name,
     permission = [{
         'FromPort': 7654,
         'IpProtocol': 'tcp',
-        'ToPort': 7654,
+        'ToPort': 7656,
         'IpRanges': [{
             'CidrIp': '0.0.0.0/0'
         }]
-    }]
+    }, {
+        'FromPort': 7777,
+        'IpProtocol': 'tcp',
+        'ToPort': 7778,
+        'IpRanges': [{
+            'CidrIp': '0.0.0.0/0'
+        }]
+    },{
+        'FromPort': 8000,
+        'IpProtocol': 'tcp',
+        'ToPort': 8003,
+        'IpRanges': [{
+            'CidrIp': '0.0.0.0/0'
+        }]
+    } ]
 
     ec2_client.authorize_security_group_ingress(GroupId=sg['GroupId'],
                                                 IpPermissions=permission)

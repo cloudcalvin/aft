@@ -24,7 +24,11 @@ def main():
 
     servers = []
     with open('benchmarks.txt') as f:
-        servers.append(f.readline().strip())
+        lines = f.readlines()
+        for line in lines:
+            servers.append(line.strip())
+
+    print('Found %d servers:%s' % (len(servers), '\n\t-' + '\n\t-'.join(servers)))
 
     message = ('%d:%d:%s:aft') % (args.threads[0], args.threads[0] *
                               args.requests[0], args.replicas[0])

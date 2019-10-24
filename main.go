@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net"
 	"time"
@@ -254,7 +253,9 @@ func (s *AftServer) updateKeyVersionIndex(transaction *pb.TransactionRecord) {
 		s.KeyVersionIndexLock.RUnlock()
 		if !ok {
 			index = &[]string{}
+			s.KeyVersionIndexLock.Lock()
 			s.KeyVersionIndex[key] = index
+			s.KeyVersionIndexLock.Unlock()
 		}
 
 		result := append(*index, kvName)
@@ -281,7 +282,6 @@ func main() {
 	// Start the multicast goroutine.
 	go MulticastRoutine(aft, config.IpAddress, config.ManagerAddress)
 
-	fmt.Println("Starting the server listener.")
 	if err = server.Serve(lis); err != nil {
 		log.Fatal("Could not start server on port %s: %v\n", port, err)
 	}

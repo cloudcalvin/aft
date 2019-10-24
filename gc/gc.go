@@ -49,19 +49,20 @@ func main() {
 	}
 
 	replicas := strings.Split(*replicaList, ",")
-	txnUpdateSockets := make([]*zmq.Socket, len(replicas))
+	txnUpdateSockets := make([]*zmq.Socket, len(replicas)-1)
 
 	for index, replica := range replicas {
-		address := fmt.Sprintf(PushTemplate, replica, PushPort)
-		fmt.Println("Connecting to ", address)
-		socket, err := context.NewSocket(zmq.PUSH)
-		if err != nil {
-			fmt.Println("Unexpected error while creating new socket:\n", err)
-			os.Exit(1)
-		}
+		if index < len(replicas)-1 { // Skip the last replica because it's an empty string.
+			address := fmt.Sprintf(PushTemplate, replica, PushPort)
+			socket, err := context.NewSocket(zmq.PUSH)
+			if err != nil {
+				fmt.Println("Unexpected error while creating new socket:\n", err)
+				os.Exit(1)
+			}
 
-		socket.Connect(address)
-		txnUpdateSockets[index] = socket
+			socket.Connect(address)
+			txnUpdateSockets[index] = socket
+		}
 	}
 
 	address := fmt.Sprintf(PullTemplate, PullPort)
@@ -84,7 +85,7 @@ func main() {
 		// Wait a 100ms for a new message; we know by default that there is only
 		// one socket to poll, so we don't have to check which socket we've
 		// received a message on.
-		sockets, err := poller.Poll(100 * time.Millisecond)
+		sockets, err := poller.Poll(10 * time.Millisecond)
 		if err != nil {
 			fmt.Println("Unexpected error returned by poller:\n", err)
 			continue
@@ -93,7 +94,6 @@ func main() {
 		// This means we received a message -- we don't need to check which socket
 		// because there is only one.
 		if len(sockets) > 0 {
-			fmt.Println("Received new update!")
 			bts, _ := txnUpdatePuller.RecvBytes(zmq.DONTWAIT)
 
 			txnList := &pb.TransactionList{}
@@ -102,6 +102,7 @@ func main() {
 				fmt.Println("Unable to parse received TransactionList:\n", err)
 				continue
 			}
+			fmt.Printf("Received %d transactions.\n", len(txnList.Records))
 
 			for _, record := range txnList.Records {
 				newTransactions = append(newTransactions, record)
@@ -125,25 +126,31 @@ func main() {
 		// Broadcast out all new transactions every second. If any transaction has
 		// been dominated, drop it from the list.
 		if reportEnd.Sub(reportStart).Seconds() > 1.0 {
-			list := &pb.TransactionList{}
+			fmt.Printf("I know about %d transactions and am sending %d.\n", len(allTransactions), len(newTransactions))
 
-			for _, record := range newTransactions {
-				// Only add the new transaction to the send set if it has not been
-				// dominated by other transactions.
-				if !isTransactionDominated(record, &consistencyManager, &keyVersionIndex) {
-					list.Records = append(list.Records, record)
+			if len(newTransactions) > 0 {
+				list := &pb.TransactionList{}
+				list.Records = append(list.Records, newTransactions...)
+				//for _, record := range newTransactions {
+				//	// Only add the new transaction to the send set if it has not been
+				//	// dominated by other transactions.
+				//	if !isTransactionDominated(record, &consistencyManager, &keyVersionIndex) {
+				//		list.Records = append(list.Records, record)
+				//	}
+				//}
+
+				newTransactions = []*pb.TransactionRecord{}
+
+				// Send the new transactions to all the replicas.
+				message, err := proto.Marshal(list)
+				if err != nil {
+					fmt.Println("Unexpected error while marshaling TransactionList protobuf:\n", err)
+					continue
 				}
-			}
 
-			// Send the new transactions to all the replicas.
-			message, err := proto.Marshal(list)
-			if err != nil {
-				fmt.Println("Unexpected error while marshaling TransactionList protobuf:\n", err)
-				continue
-			}
-
-			for _, socket := range txnUpdateSockets {
-				socket.SendBytes(message, zmq.DONTWAIT)
+				for _, socket := range txnUpdateSockets {
+					socket.SendBytes(message, zmq.DONTWAIT)
+				}
 			}
 
 			reportStart = time.Now()
