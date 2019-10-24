@@ -27,4 +27,7 @@ type ConsistencyManager interface {
 
 	// TODO: Add description of this function.
 	GetStorageKeyName(key string, timestamp int64, transactionId string) string
+
+	// TODO: Add description of this function.
+	CompareKeys(one string, two string) bool
 }

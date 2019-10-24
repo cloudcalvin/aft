@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"time"
@@ -278,8 +279,9 @@ func main() {
 	pb.RegisterAftServer(server, aft)
 
 	// Start the multicast goroutine.
-	go MulticastRoutine(aft, config.IpAddress, config.ReplicaList)
+	go MulticastRoutine(aft, config.IpAddress, config.ManagerAddress)
 
+	fmt.Println("Starting the server listener.")
 	if err = server.Serve(lis); err != nil {
 		log.Fatal("Could not start server on port %s: %v\n", port, err)
 	}

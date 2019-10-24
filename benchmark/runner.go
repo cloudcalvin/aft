@@ -260,7 +260,7 @@ func benchmarkLocal(
 
 	clients := []*pb.AftClient{}
 	for _, replica := range replicas {
-		conn, err := grpc.Dial(fmt.Sprint("%s:7654", replica), grpc.WithInsecure())
+		conn, err := grpc.Dial(fmt.Sprintf("%s:7654", replica), grpc.WithInsecure())
 		if err != nil {
 			fmt.Printf("Unexpected error:\n%v\n", err)
 			os.Exit(1)
@@ -289,7 +289,8 @@ func benchmarkLocal(
 
 		requestStart := time.Now()
 		client := clients[rand.Intn(len(clients))] // Pick a client to use at random.
-		tag, _ := (*client).StartTransaction(context.Background(), &empty.Empty{})
+		tag, err := (*client).StartTransaction(context.Background(), &empty.Empty{})
+		fmt.Println(err)
 
 		for keyId := 0; keyId < keyCount; keyId++ {
 			key := strconv.FormatUint(zipf.Uint64(), 10)

@@ -2,14 +2,13 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"sync"
 
 	uuid "github.com/nu7hatch/gouuid"
-	"gopkg.in/yaml.v2"
 
+	"github.com/vsreekanti/aft/config"
 	"github.com/vsreekanti/aft/consistency"
 	pb "github.com/vsreekanti/aft/proto/aft"
 	"github.com/vsreekanti/aft/storage"
@@ -31,47 +30,31 @@ type AftServer struct {
 	KeyVersionIndexLock     *sync.RWMutex
 }
 
-type aftConfig struct {
-	ConsistencyType string   `yaml:"consistencyType"`
-	StorageType     string   `yaml:"storageType"`
-	IpAddress       string   `yaml:"ipAddress"`
-	ReplicaList     []string `yaml:"replicaList"`
-}
-
-func NewAftServer() (*AftServer, *aftConfig) {
-	bts, err := ioutil.ReadFile("conf/aft-config.yml")
-	if err != nil {
-		log.Fatal("Unable to read aft-config.yml. Please make sure that the config is properly configured and retry:\n%v", err)
-		os.Exit(1)
-	}
-
-	var config aftConfig
-	err = yaml.Unmarshal(bts, &config)
-	if err != nil {
-		log.Fatal("Unable to correctly parse aft-config.yml. Please check the config file and retry:\n%v", err)
-		os.Exit(2)
-	}
+func NewAftServer() (*AftServer, *config.AftConfig) {
+	conf := config.ParseConfig("conf/aft-config.yml")
 
 	var consistencyManager consistency.ConsistencyManager
-	if config.ConsistencyType == "lww" {
+	switch conf.ConsistencyType {
+	case "lww":
 		consistencyManager = &consistency.LWWConsistencyManager{}
-	} else if config.ConsistencyType == "read-atomic" {
+	case "read-atomic":
 		consistencyManager = &consistency.ReadAtomicConsistencyManager{}
-	} else {
-		log.Fatal(fmt.Sprintf("Unrecognized consistencyType %s. Valid types are: lww, read-atomic.", config.ConsistencyType))
+	default:
+		log.Fatal(fmt.Sprintf("Unrecognized consistencyType %s. Valid types are: lww, read-atomic.", conf.ConsistencyType))
 		os.Exit(3)
 	}
 
 	// TODO: These paths should be in the conf.
 	var storageManager storage.StorageManager
-	if config.StorageType == "s3" {
+	switch conf.StorageType {
+	case "s3":
 		storageManager = storage.NewS3StorageManager("vsreekanti")
-	} else if config.StorageType == "dynamo" {
+	case "dynamo":
 		storageManager = storage.NewDynamoStorageManager("AftData", "AftData")
-	} else if config.StorageType == "redis" {
+	case "redis":
 		storageManager = storage.NewRedisStorageManager("aft-test.kxmfgs.clustercfg.use1.cache.amazonaws.com:6379", "")
-	} else {
-		log.Fatal(fmt.Sprintf("Unrecognized storageType %s. Valid types are: s3, dynamo, redis.", config.StorageType))
+	default:
+		log.Fatal(fmt.Sprintf("Unrecognized storageType %s. Valid types are: s3, dynamo, redis.", conf.StorageType))
 		os.Exit(3)
 	}
 
@@ -126,5 +109,5 @@ func NewAftServer() (*AftServer, *aftConfig) {
 
 	fmt.Printf("Prepopulation finished: Found %d transactions and %d keys.\n", len(server.FinishedTransactions), len(server.KeyVersionIndex))
 
-	return server, &config
+	return server, conf
 }

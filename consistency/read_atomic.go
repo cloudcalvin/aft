@@ -63,7 +63,7 @@ func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
 		latest := constraintSet[0]
 
 		for _, constraint := range constraintSet {
-			if compareKeys(constraint, latest) {
+			if racm.CompareKeys(constraint, latest) {
 				latest = constraint
 			}
 		}
@@ -95,7 +95,7 @@ func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
 		// have already read.
 		for read := range transaction.ReadSet {
 			readVersion := racm.GetStorageKeyName(read, transaction.Timestamp, transaction.Id)
-			if !compareKeys(readVersion, keyVersion) {
+			if !racm.CompareKeys(readVersion, keyVersion) {
 				validVersion = false
 				break
 			}
@@ -103,7 +103,7 @@ func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
 
 		// If the version is valid and is newer than we have already seen as the
 		// latest, we update the latest version.
-		if validVersion && (len(latest) == 0 || compareKeys(keyVersion, latest)) {
+		if validVersion && (len(latest) == 0 || racm.CompareKeys(keyVersion, latest)) {
 			latest = keyVersion
 		}
 	}
@@ -123,7 +123,7 @@ func (racm *ReadAtomicConsistencyManager) GetStorageKeyName(key string, timestam
 // format defined in keyTemplate above. It returns true if the key passed in as
 // argument `one` is newer than the key passed in as argument `two`. It returns
 // false otherwise.
-func compareKeys(one string, two string) bool {
+func (racm *ReadAtomicConsistencyManager) CompareKeys(one string, two string) bool {
 	if one[0] == '/' {
 		rn := []rune(one)
 		one = string(rn[1:len(rn)])

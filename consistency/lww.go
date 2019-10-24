@@ -26,3 +26,7 @@ func (lww *LWWConsistencyManager) GetValidKeyVersion(
 func (lww *LWWConsistencyManager) GetStorageKeyName(key string, timestamp int64, transactionId string) string {
 	return key
 }
+
+func (lww *LWWConsistencyManager) CompareKeys(one string, two string) bool {
+	return false
+}
