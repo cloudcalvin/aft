@@ -26,11 +26,6 @@ service Aft {
   // will be dropped, and the transaction in the underlying engine will be
   // closed.
   rpc AbortTransaction(TransactionTag) returns (TransactionTag) {}
-
-  // This method updates the local metadata on each replica with the list of
-  // transactions sent to it by another replica. This method is for internal
-  // use only.
-  rpc UpdateMetadata(TransactionList) returns (google.protobuf.Empty) {}
 }
 
 // An enum that tracks the status of each transaction.
@@ -80,8 +75,15 @@ message TransactionRecord {
 // Captures a list of `TransactionRecord`s, used to communicate committed
 // transactions between replicas.
 message TransactionList {
-  // The list of ``TransactionRecord`s being communicated.`
+  // The list of `TransactionRecord`s being communicated.
   repeated TransactionRecord records = 1;
+}
+
+// A list of transaction UUIDs that are communicated between the GC process and
+// the Aft replicas.
+message TransactionIdList {
+  // The list of transaction UUIDs.
+  repeated string ids = 1;
 }
 
 // A request to read or write a key from an application to the storage engine.

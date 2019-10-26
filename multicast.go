@@ -1,7 +1,6 @@
 package main
 
 import (
-	ctx "context"
 	"fmt"
 	"os"
 	"time"
@@ -14,11 +13,40 @@ import (
 
 const (
 	PullTemplate = "tcp://*:%d"
-	PullPort     = 7777
-
 	PushTemplate = "tcp://%s:%d"
-	PushPort     = 7778
+
+	// Ports to notify and be notified of new transactions.
+	TxnPullPort = 7777
+	TxnPushPort = 7778
+
+	// Ports to notify and be notified of pending transaction deletes.
+	PendingTxnDeletePullPort = 7779
+	PendingTxnDeletePushPort = 7780
+
+	// Port to be notified of successful transaction deletes.
+	TxnDeletePullPort = 7781
 )
+
+func createSocket(tp zmq.Type, context *zmq.Context, address string, bind bool) *zmq.Socket {
+	sckt, err := context.NewSocket(tp)
+	if err != nil {
+		fmt.Println("Unexpected error while creating new socket:\n", err)
+		os.Exit(1)
+	}
+
+	if bind {
+		err = sckt.Bind(address)
+	} else {
+		err = sckt.Connect(address)
+	}
+
+	if err != nil {
+		fmt.Println("Unexpected error while binding/connecting socket:\n", err)
+		os.Exit(1)
+	}
+
+	return sckt
+}
 
 func MulticastRoutine(server *AftServer, ipAddress string, managerAddress string) {
 	context, err := zmq.NewContext()
@@ -27,75 +55,142 @@ func MulticastRoutine(server *AftServer, ipAddress string, managerAddress string
 		os.Exit(1)
 	}
 
-	updatePuller, err := context.NewSocket(zmq.PULL)
-	if err != nil {
-		fmt.Println("Unexpected error while creating new socket:\n", err)
-		os.Exit(1)
-	}
-	err = updatePuller.Bind(fmt.Sprintf(PullTemplate, PullPort))
-	if err != nil {
-		fmt.Println("Unexpected error while binding socket:\n", err)
-		os.Exit(1)
-	}
+	// Sockets to receive and send notifications about new transactions.
+	updatePuller := createSocket(zmq.PULL, context, fmt.Sprintf(PullTemplate, TxnPullPort), true)
+	updatePusher := createSocket(zmq.PUSH, context, fmt.Sprintf(PushTemplate, managerAddress, TxnPushPort), false)
 
-	updatePusher, err := context.NewSocket(zmq.PUSH)
-	if err != nil {
-		fmt.Println("Unexpected error while creating new socket:\n", err)
-		os.Exit(1)
-	}
-	err = updatePusher.Connect(fmt.Sprintf(PushTemplate, managerAddress, PushPort))
-	if err != nil {
-		fmt.Println("Unexpected error while connecting socket:\n", err)
-		os.Exit(1)
-	}
+	// Sockets to receive and send notifications about pending transaction
+	// deletes.
+	pendingDeletePuller := createSocket(zmq.PULL, context, fmt.Sprintf(PullTemplate, PendingTxnDeletePullPort), true)
+	pendingDeletePusher := createSocket(zmq.PUSH, context, fmt.Sprintf(PushTemplate, managerAddress, PendingTxnDeletePushPort), false)
+
+	// Sockets to pull udpates about successfully deleted transactions.
+	deletePuller := createSocket(zmq.PULL, context, fmt.Sprintf(PullTemplate, TxnDeletePullPort), true)
 
 	// Create a new poller to wait for new updates.
 	poller := zmq.NewPoller()
 	poller.Add(updatePuller, zmq.POLLIN)
+	poller.Add(pendingDeletePuller, zmq.POLLIN)
+	poller.Add(deletePuller, zmq.POLLIN)
 
 	// A set to track which transactions we've already gossiped.
 	seenTransactions := map[string]bool{}
+
+	// We use this map to make sure we don't say to GC the same transaction more
+	// than once.
+	deletedMarkedTransactions := map[string]bool{}
 
 	reportStart := time.Now()
 	for true {
 		// Wait a 100ms for a new message; we know by default that there is only
 		// one socket to poll, so we don't have to check which socket we've
 		// received a message on.
-		sockets, err := poller.Poll(10 * time.Millisecond)
+		sockets, _ := poller.Poll(10 * time.Millisecond)
 
-		if err != nil {
-			fmt.Println("Unexpected error returned by poller:\n", err)
-			continue
-		}
+		for _, socket := range sockets {
+			switch s := socket.Socket; s {
+			case updatePuller:
+				{
+					bts, _ := updatePuller.RecvBytes(zmq.DONTWAIT)
 
-		// This means we received a message -- we don't need to check which socket
-		// because there is only one.
-		if len(sockets) > 0 {
-			bts, _ := updatePuller.RecvBytes(zmq.DONTWAIT)
+					newTransactions := &pb.TransactionList{}
+					err = proto.Unmarshal(bts, newTransactions)
+					if err != nil {
+						fmt.Println("Unexpected error while deserializing Protobufs:\n", err)
+						continue
+					}
+					fmt.Printf("Received %d new transactions.\n", len(newTransactions.Records))
 
-			newTransactions := &pb.TransactionList{}
-			err = proto.Unmarshal(bts, newTransactions)
-			fmt.Printf("Received %d new transactions.\n", len(newTransactions.Records))
-			if err != nil {
-				fmt.Println("Unexpected error while deserializing Protobufs:\n", err)
-				continue
-			}
+					// Filter out any transactions we have already heard about.
+					unseenTransactions := &pb.TransactionList{}
+					for _, record := range newTransactions.Records {
+						if _, ok := seenTransactions[record.Id]; !ok {
+							unseenTransactions.Records = append(unseenTransactions.Records, record)
+							seenTransactions[record.Id] = true
+						}
+					}
 
-			// Filter out any transactions we have already heard about.
-			unseenTransactions := &pb.TransactionList{}
-			for _, record := range newTransactions.Records {
-				if _, ok := seenTransactions[record.Id]; !ok {
-					unseenTransactions.Records = append(unseenTransactions.Records, record)
-					seenTransactions[record.Id] = true
+					server.UpdateMetadata(unseenTransactions)
+				}
+			case pendingDeletePuller:
+				{
+					bts, _ := pendingDeletePuller.RecvBytes(zmq.DONTWAIT)
+
+					pendingDeleteIds := &pb.TransactionIdList{}
+					err = proto.Unmarshal(bts, pendingDeleteIds)
+					if err != nil {
+						fmt.Println("Unexpected error while deserializing Protobufs:\n", err)
+						continue
+					}
+					fmt.Printf("Received %d transaction IDs for pending deletes.\n", len(pendingDeleteIds.Ids))
+
+					validDeleteIds := &pb.TransactionIdList{}
+					zeroDepsCount := 0
+					depsAverage := 0
+					for _, id := range pendingDeleteIds.Ids {
+						// Make sure we don't delete a transaction we haven't seen before.
+						if _, ok := seenTransactions[id]; ok {
+							// Only delete it if we've already considered it dominated
+							// locally and we have no dependencies on it. We are guaranteed
+							// to have no dependencies because we already deleted it.
+							server.LocallyDeletedTransactionsLock.RLock()
+							_, deleted := server.LocallyDeletedTransactions[id]
+							_, marked := deletedMarkedTransactions[id]
+							server.LocallyDeletedTransactionsLock.RUnlock()
+
+							if deleted && !marked {
+								validDeleteIds.Ids = append(validDeleteIds.Ids, id)
+								deletedMarkedTransactions[id] = true
+							}
+						}
+
+						server.TransactionDependenciesLock.RLock()
+						if server.TransactionDependencies[id] <= 0 {
+							zeroDepsCount += 1
+						} else {
+							depsAverage += server.TransactionDependencies[id]
+						}
+						server.TransactionDependenciesLock.RUnlock()
+					}
+
+					average := float64(depsAverage) / float64(len(pendingDeleteIds.Ids)-len(validDeleteIds.Ids))
+
+					fmt.Printf("Received %d pending deletes and determined %d of them were valid---%d of them had <= 0 dependencies; of there there was an average of %f.\n", len(pendingDeleteIds.Ids), len(validDeleteIds.Ids), zeroDepsCount, average)
+					bts, _ = proto.Marshal(validDeleteIds)
+					pendingDeletePusher.SendBytes(bts, zmq.DONTWAIT)
+				}
+			case deletePuller:
+				{
+					bts, _ := deletePuller.RecvBytes(zmq.DONTWAIT)
+
+					deleteIds := &pb.TransactionIdList{}
+					err = proto.Unmarshal(bts, deleteIds)
+					if err != nil {
+						fmt.Println("Unexpected error while deserializing Protobufs:\n", err)
+						continue
+					}
+					fmt.Printf("Received %d transaction IDs for successful deletes.\n", len(deleteIds.Ids))
+
+					// Delete the successfully deleted IDs from our local seen
+					// transactions metadata.
+					for _, id := range deleteIds.Ids {
+						delete(seenTransactions, id)
+						delete(deletedMarkedTransactions, id)
+
+						server.FinishedTransactionLock.Lock()
+						delete(server.FinishedTransactions, id)
+						server.FinishedTransactionLock.Unlock()
+
+						server.LocallyDeletedTransactionsLock.Lock()
+						delete(server.LocallyDeletedTransactions, id)
+						server.LocallyDeletedTransactionsLock.Unlock()
+					}
 				}
 			}
-
-			server.UpdateMetadata(ctx.TODO(), unseenTransactions)
 		}
 
 		reportEnd := time.Now()
 		if reportEnd.Sub(reportStart).Seconds() > 1.0 {
-			fmt.Printf("I currently know about %d transations.\n", len(seenTransactions))
 			// Lock the mutex, serialize the newly committed transactions, and unlock.
 			server.FinishedTransactionLock.RLock()
 			message := pb.TransactionList{}
@@ -123,4 +218,123 @@ func MulticastRoutine(server *AftServer, ipAddress string, managerAddress string
 			reportStart = time.Now()
 		}
 	}
+}
+
+func LocalGCRoutine(server *AftServer) {
+	for true {
+		// Run the GC routine every 100ms.
+		// time.Sleep(10 * time.Millisecond)
+
+		dominatedTransactions := map[string]*pb.TransactionRecord{}
+
+		// We create a local copy of the keys so that we don't modify the list
+		// while we are iterating over it. Otherwise, we'd have to RLock for the
+		// whole GC duration.
+		server.FinishedTransactionLock.RLock()
+		keys := make([]string, len(server.FinishedTransactions))
+		index := 0
+		for tid := range server.FinishedTransactions {
+			keys[index] = tid
+			index += 1
+		}
+		server.FinishedTransactionLock.RUnlock()
+
+		for _, tid := range keys {
+			server.FinishedTransactionLock.RLock()
+			txn := server.FinishedTransactions[tid]
+			server.FinishedTransactionLock.RUnlock()
+
+			if txn != nil && isTransactionDominated(txn, server) {
+				server.LocallyDeletedTransactionsLock.RLock()
+				if _, ok := server.LocallyDeletedTransactions[tid]; !ok {
+					// We can skip this record if we've already looked at this txn.
+					server.TransactionDependenciesLock.RLock()
+					if val, ok := server.TransactionDependencies[tid]; !ok || val == 0 {
+						dominatedTransactions[tid] = txn
+					}
+					server.TransactionDependenciesLock.RUnlock()
+				}
+				server.LocallyDeletedTransactionsLock.RUnlock()
+			}
+
+			if len(dominatedTransactions) > 1000 {
+				break
+			}
+		}
+
+		go transactionClearRoutine(&dominatedTransactions, server)
+
+	}
+}
+
+func transactionClearRoutine(dominatedTransactions *map[string]*pb.TransactionRecord, server *AftServer) {
+	// Delete all of the key version index data, then clean up committed
+	// transactions and the read cache.
+	cachedKeys := []string{}
+	for dominatedTid := range *dominatedTransactions {
+		txn := (*dominatedTransactions)[dominatedTid]
+		for _, key := range txn.WriteSet {
+			keyVersion := server.ConsistencyManager.GetStorageKeyName(key, txn.Timestamp, txn.Id)
+
+			server.KeyVersionIndexLock.Lock()
+			if (*server.KeyVersionIndex[key])[keyVersion] {
+				cachedKeys = append(cachedKeys, keyVersion)
+			}
+
+			delete(*server.KeyVersionIndex[key], keyVersion)
+			server.KeyVersionIndexLock.Unlock()
+		}
+	}
+
+	for tid := range *dominatedTransactions {
+		server.LocallyDeletedTransactionsLock.Lock()
+		server.LocallyDeletedTransactions[tid] = true
+		server.LocallyDeletedTransactionsLock.Unlock()
+	}
+
+	// Consider moving these locks inside the loop.
+	for _, keyVersion := range cachedKeys {
+		server.ReadCacheLock.Lock()
+		delete(server.ReadCache, keyVersion)
+		server.ReadCacheLock.Unlock()
+	}
+}
+
+// A transaction is dominated if all the keys in its write set have versions
+// that are newer than the version from this transaction.
+func isTransactionDominated(transaction *pb.TransactionRecord, server *AftServer) bool {
+	dominated := true
+	for _, key := range transaction.WriteSet {
+		if !isKeyVersionDominated(key, transaction, server) {
+			dominated = false
+		}
+	}
+
+	return dominated
+}
+
+func isKeyVersionDominated(key string, transaction *pb.TransactionRecord, server *AftServer) bool {
+	// We know the key has to be in the index because we always add it when we
+	// hear about a new key.
+	server.KeyVersionIndexLock.RLock()
+	index := server.KeyVersionIndex[key]
+	keyList := make([]string, len(*index))
+
+	idx := 0
+	for key := range *index {
+		keyList[idx] = key
+		idx += 1
+	}
+	server.KeyVersionIndexLock.RUnlock()
+
+	storageKey := server.ConsistencyManager.GetStorageKeyName(key, transaction.Timestamp, transaction.Id)
+
+	for _, other := range keyList {
+		// We return true if *any* key dominates this one, so we can short circuit.
+		if server.ConsistencyManager.CompareKeys(other, storageKey) {
+			return true
+		}
+	}
+
+	return false
 }

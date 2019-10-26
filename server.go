@@ -15,19 +15,25 @@ import (
 )
 
 type AftServer struct {
-	Id                      string
-	StorageManager          storage.StorageManager
-	ConsistencyManager      consistency.ConsistencyManager
-	RunningTransactions     map[string]*pb.TransactionRecord
-	RunningTransactionLock  *sync.RWMutex
-	UpdateBuffer            map[string][]*keyUpdate
-	UpdateBufferLock        *sync.RWMutex
-	ReadCache               map[string]pb.KeyValuePair
-	ReadCacheLock           *sync.RWMutex
-	FinishedTransactions    map[string]*pb.TransactionRecord
-	FinishedTransactionLock *sync.RWMutex
-	KeyVersionIndex         map[string]*[]string
-	KeyVersionIndexLock     *sync.RWMutex
+	Id                             string
+	StorageManager                 storage.StorageManager
+	ConsistencyManager             consistency.ConsistencyManager
+	RunningTransactions            map[string]*pb.TransactionRecord
+	RunningTransactionLock         *sync.RWMutex
+	UpdateBuffer                   map[string][]*keyUpdate
+	UpdateBufferLock               *sync.RWMutex
+	ReadCache                      map[string]pb.KeyValuePair
+	ReadCacheLock                  *sync.RWMutex
+	FinishedTransactions           map[string]*pb.TransactionRecord
+	FinishedTransactionLock        *sync.RWMutex
+	KeyVersionIndex                map[string](*map[string]bool)
+	KeyVersionIndexLock            *sync.RWMutex
+	TransactionDependencies        map[string]int
+	TransactionDependenciesLock    *sync.RWMutex
+	LocallyDeletedTransactions     map[string]bool
+	LocallyDeletedTransactionsLock *sync.RWMutex
+	LatestVersionIndex             map[string]string
+	LatestVersionIndexLock         *sync.RWMutex
 }
 
 func NewAftServer() (*AftServer, *config.AftConfig) {
@@ -65,19 +71,25 @@ func NewAftServer() (*AftServer, *config.AftConfig) {
 	}
 
 	server := &AftServer{
-		Id:                      uid.String(),
-		ConsistencyManager:      consistencyManager,
-		StorageManager:          storageManager,
-		RunningTransactions:     map[string]*pb.TransactionRecord{},
-		RunningTransactionLock:  &sync.RWMutex{},
-		UpdateBuffer:            map[string][]*keyUpdate{},
-		UpdateBufferLock:        &sync.RWMutex{},
-		ReadCache:               map[string]pb.KeyValuePair{},
-		ReadCacheLock:           &sync.RWMutex{},
-		FinishedTransactions:    map[string]*pb.TransactionRecord{},
-		FinishedTransactionLock: &sync.RWMutex{},
-		KeyVersionIndex:         map[string]*[]string{},
-		KeyVersionIndexLock:     &sync.RWMutex{},
+		Id:                             uid.String(),
+		ConsistencyManager:             consistencyManager,
+		StorageManager:                 storageManager,
+		RunningTransactions:            map[string]*pb.TransactionRecord{},
+		RunningTransactionLock:         &sync.RWMutex{},
+		UpdateBuffer:                   map[string][]*keyUpdate{},
+		UpdateBufferLock:               &sync.RWMutex{},
+		ReadCache:                      map[string]pb.KeyValuePair{},
+		ReadCacheLock:                  &sync.RWMutex{},
+		FinishedTransactions:           map[string]*pb.TransactionRecord{},
+		FinishedTransactionLock:        &sync.RWMutex{},
+		KeyVersionIndex:                map[string]*map[string]bool{},
+		KeyVersionIndexLock:            &sync.RWMutex{},
+		TransactionDependencies:        map[string]int{},
+		TransactionDependenciesLock:    &sync.RWMutex{},
+		LocallyDeletedTransactions:     map[string]bool{},
+		LocallyDeletedTransactionsLock: &sync.RWMutex{},
+		LatestVersionIndex:             map[string]string{},
+		LatestVersionIndexLock:         &sync.RWMutex{},
 	}
 
 	// Retrieve the list of committed transactions
@@ -98,12 +110,11 @@ func NewAftServer() (*AftServer, *config.AftConfig) {
 
 			index, ok := server.KeyVersionIndex[key]
 			if !ok {
-				index = &[]string{}
+				index = &map[string]bool{}
 				server.KeyVersionIndex[key] = index
 			}
 
-			result := append(*index, kvName)
-			server.KeyVersionIndex[key] = &result
+			(*index)[kvName] = false
 		}
 	}
 

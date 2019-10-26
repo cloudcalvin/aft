@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang/protobuf/proto"
@@ -13,15 +14,45 @@ import (
 	"github.com/vsreekanti/aft/config"
 	"github.com/vsreekanti/aft/consistency"
 	pb "github.com/vsreekanti/aft/proto/aft"
+	"github.com/vsreekanti/aft/storage"
 )
 
 const (
 	PushTemplate = "tcp://%s:%d"
-	PushPort     = 7777
-
 	PullTemplate = "tcp://*:%d"
-	PullPort     = 7778
+
+	// Ports to notify and be notified of new transactions.
+	TxnPushPort = 7777
+	TxnPullPort = 7778
+
+	// Ports to notify and be notified of pending transaction deletes.
+	PendingTxnDeletePushPort = 7779
+	PendingTxnDeletePullPort = 7780
+
+	// Port to be notified of successful transaction deletes.
+	TxnDeletePushPort = 7781
 )
+
+func createSocket(tp zmq.Type, context *zmq.Context, address string, bind bool) *zmq.Socket {
+	sckt, err := context.NewSocket(tp)
+	if err != nil {
+		fmt.Println("Unexpected error while creating new socket:\n", err)
+		os.Exit(1)
+	}
+
+	if bind {
+		err = sckt.Bind(address)
+	} else {
+		err = sckt.Connect(address)
+	}
+
+	if err != nil {
+		fmt.Printf("Unexpected error while binding/connecting socket to %s:\n%v", address, err)
+		os.Exit(1)
+	}
+
+	return sckt
+}
 
 var replicaList = flag.String("replicaList", "", "A comma separated list of addresses of Aft replicas")
 
@@ -42,6 +73,16 @@ func main() {
 		consistencyManager = &consistency.ReadAtomicConsistencyManager{}
 	}
 
+	// var storageManager storage.StorageManager
+	// switch conf.StorageType {
+	// case "s3":
+	// 	storageManager = storage.NewS3StorageManager("vsreekanti")
+	// case "dynamo":
+	// 	storageManager = storage.NewDynamoStorageManager("AftData", "AftData")
+	// case "redis":
+	// 	storageManager = storage.NewRedisStorageManager("aft-test.kxmfgs.clustercfg.use1.cache.amazonaws.com:6379", "")
+	// }
+
 	context, err := zmq.NewContext()
 	if err != nil {
 		fmt.Println("Unexpected error while creating ZeroMQ context. Exiting:\n", err)
@@ -49,35 +90,47 @@ func main() {
 	}
 
 	replicas := strings.Split(*replicaList, ",")
-	txnUpdateSockets := make([]*zmq.Socket, len(replicas)-1)
+	numReplicas := len(replicas) - 1
+	txnUpdateSockets := make([]*zmq.Socket, numReplicas)
+	pendingDeleteSockets := make([]*zmq.Socket, numReplicas)
+	deleteSockets := make([]*zmq.Socket, numReplicas)
 
 	for index, replica := range replicas {
-		if index < len(replicas)-1 { // Skip the last replica because it's an empty string.
-			address := fmt.Sprintf(PushTemplate, replica, PushPort)
-			socket, err := context.NewSocket(zmq.PUSH)
-			if err != nil {
-				fmt.Println("Unexpected error while creating new socket:\n", err)
-				os.Exit(1)
-			}
-
-			socket.Connect(address)
+		if index < numReplicas { // Skip the last replica because it's an empty string.
+			txnUpdateAddress := fmt.Sprintf(PushTemplate, replica, TxnPushPort)
+			socket := createSocket(zmq.PUSH, context, txnUpdateAddress, false)
 			txnUpdateSockets[index] = socket
+
+			pendingDeleteAddress := fmt.Sprintf(PushTemplate, replica, PendingTxnDeletePushPort)
+			socket = createSocket(zmq.PUSH, context, pendingDeleteAddress, false)
+			pendingDeleteSockets[index] = socket
+
+			deleteAddress := fmt.Sprintf(PushTemplate, replica, TxnDeletePushPort)
+			socket = createSocket(zmq.PUSH, context, deleteAddress, false)
+			deleteSockets[index] = socket
 		}
 	}
 
-	address := fmt.Sprintf(PullTemplate, PullPort)
-	txnUpdatePuller, err := context.NewSocket(zmq.PULL)
-	if err != nil {
-		fmt.Println("Unexpected error while creating new socket:\n", err)
-		os.Exit(1)
-	}
-	txnUpdatePuller.Bind(address)
+	txnUpdatePuller := createSocket(zmq.PULL, context, fmt.Sprintf(PullTemplate, TxnPullPort), true)
+	pendingDeletePuller := createSocket(zmq.PULL, context, fmt.Sprintf(PullTemplate, PendingTxnDeletePullPort), true)
 
 	poller := zmq.NewPoller()
 	poller.Add(txnUpdatePuller, zmq.POLLIN)
+	poller.Add(pendingDeletePuller, zmq.POLLIN)
 
 	allTransactions := map[string]*pb.TransactionRecord{}
 	keyVersionIndex := map[string]*[]string{}
+	// pendingDeleteTransactions := map[string]int{} // TODO: Should this track individual replicas?
+
+	allTransactionsLock := &sync.RWMutex{}
+	keyVersionIndexLock := &sync.RWMutex{}
+	// pendingDeleteTransactionsLock := &sync.RWMutex{}
+
+	// go gcRoutine(&allTransactions, allTransactionsLock, &keyVersionIndex,
+	// 	keyVersionIndexLock, &pendingDeleteTransactions, pendingDeleteTransactionsLock,
+	// 	&pendingDeleteSockets, &consistencyManager,
+	// )
+
 	newTransactions := []*pb.TransactionRecord{}
 
 	reportStart := time.Now()
@@ -85,38 +138,76 @@ func main() {
 		// Wait a 100ms for a new message; we know by default that there is only
 		// one socket to poll, so we don't have to check which socket we've
 		// received a message on.
-		sockets, err := poller.Poll(10 * time.Millisecond)
-		if err != nil {
-			fmt.Println("Unexpected error returned by poller:\n", err)
-			continue
-		}
+		sockets, _ := poller.Poll(10 * time.Millisecond)
 
-		// This means we received a message -- we don't need to check which socket
-		// because there is only one.
-		if len(sockets) > 0 {
-			bts, _ := txnUpdatePuller.RecvBytes(zmq.DONTWAIT)
+		for _, socket := range sockets {
+			switch s := socket.Socket; s {
+			case txnUpdatePuller:
+				{
+					bts, _ := txnUpdatePuller.RecvBytes(zmq.DONTWAIT)
 
-			txnList := &pb.TransactionList{}
-			err = proto.Unmarshal(bts, txnList)
-			if err != nil {
-				fmt.Println("Unable to parse received TransactionList:\n", err)
-				continue
-			}
-			fmt.Printf("Received %d transactions.\n", len(txnList.Records))
-
-			for _, record := range txnList.Records {
-				newTransactions = append(newTransactions, record)
-				allTransactions[record.Id] = record
-
-				for _, key := range record.WriteSet {
-					index, ok := keyVersionIndex[key]
-					if !ok {
-						index = &[]string{}
-						keyVersionIndex[key] = index
+					txnList := &pb.TransactionList{}
+					err = proto.Unmarshal(bts, txnList)
+					if err != nil {
+						fmt.Println("Unable to parse received TransactionList:\n", err)
+						continue
 					}
 
-					result := append(*index, consistencyManager.GetStorageKeyName(key, record.Timestamp, record.Id))
-					keyVersionIndex[key] = &result
+					for _, record := range txnList.Records {
+						allTransactionsLock.Lock()
+						allTransactions[record.Id] = record
+						allTransactionsLock.Unlock()
+						newTransactions = append(newTransactions, record)
+
+						for _, key := range record.WriteSet {
+							keyVersionIndexLock.RLock()
+							index, ok := keyVersionIndex[key]
+							keyVersionIndexLock.RUnlock()
+
+							if !ok {
+								index = &[]string{}
+							}
+
+							result := append(*index, consistencyManager.GetStorageKeyName(key, record.Timestamp, record.Id))
+							keyVersionIndexLock.Lock()
+							keyVersionIndex[key] = &result
+							keyVersionIndexLock.Unlock()
+						}
+					}
+				}
+			case pendingDeletePuller:
+				{
+					// bts, _ := pendingDeletePuller.RecvBytes(zmq.DONTWAIT)
+
+					// txnIdList := &pb.TransactionIdList{}
+					// err = proto.Unmarshal(bts, txnIdList)
+					// if err != nil {
+					// 	fmt.Println("Unable to parse received TransactionIdList:\n", err)
+					// 	continue
+					// }
+
+					// for _, id := range txnIdList.Ids {
+					// 	// We don't need to check if it's in the map because it is
+					// 	// guaranteed to be by the GC process.
+					// 	pendingDeleteTransactionsLock.Lock()
+					// 	pendingDeleteTransactions[id] += 1
+					// 	val := pendingDeleteTransactions[id]
+					// 	pendingDeleteTransactionsLock.Unlock()
+
+					// 	if val == numReplicas {
+					// 		deleteTransaction(
+					// 			id, &storageManager, &consistencyManager, &allTransactions,
+					// 			allTransactionsLock, &keyVersionIndex, keyVersionIndexLock,
+					// 		)
+
+					// 		deletedList := &pb.TransactionIdList{Ids: []string{id}}
+					// 		bts, _ := proto.Marshal(deletedList)
+
+					// 		for _, sckt := range deleteSockets {
+					// 			sckt.SendBytes(bts, zmq.DONTWAIT)
+					// 		}
+					// 	}
+					// }
 				}
 			}
 		}
@@ -126,18 +217,10 @@ func main() {
 		// Broadcast out all new transactions every second. If any transaction has
 		// been dominated, drop it from the list.
 		if reportEnd.Sub(reportStart).Seconds() > 1.0 {
-			fmt.Printf("I know about %d transactions and am sending %d.\n", len(allTransactions), len(newTransactions))
 
 			if len(newTransactions) > 0 {
 				list := &pb.TransactionList{}
 				list.Records = append(list.Records, newTransactions...)
-				//for _, record := range newTransactions {
-				//	// Only add the new transaction to the send set if it has not been
-				//	// dominated by other transactions.
-				//	if !isTransactionDominated(record, &consistencyManager, &keyVersionIndex) {
-				//		list.Records = append(list.Records, record)
-				//	}
-				//}
 
 				newTransactions = []*pb.TransactionRecord{}
 
@@ -155,29 +238,133 @@ func main() {
 
 			reportStart = time.Now()
 		}
+	}
+}
 
-		// TODO: Garbage collect transactions.
+func deleteTransaction(
+	tid string,
+	storage *storage.StorageManager,
+	cm *consistency.ConsistencyManager,
+	allTransactions *map[string]*pb.TransactionRecord,
+	allTransactionsLock *sync.RWMutex,
+	keyVersionIndex *map[string]*[]string,
+	keyVersionIndexLock *sync.RWMutex,
+) {
+	// Clear the local metadata.
+	allTransactionsLock.Lock()
+	txn := (*allTransactions)[tid]
+	delete(*allTransactions, tid)
+	allTransactionsLock.Unlock()
+
+	for _, key := range txn.WriteSet {
+		storageKey := (*cm).GetStorageKeyName(key, txn.Timestamp, txn.Id)
+		keyVersionIndexLock.Lock()
+		keyIndex := 0
+		index := (*keyVersionIndex)[key]
+		for idx, version := range *index {
+			if version == storageKey {
+				keyIndex = idx
+				break
+			}
+		}
+
+		(*index)[keyIndex] = (*index)[len(*index)-1]
+		(*index) = (*index)[:len(*index)-1]
+		keyVersionIndexLock.Unlock()
+
+		(*storage).Delete(storageKey)
+	}
+}
+
+func gcRoutine(
+	allTransactions *map[string]*pb.TransactionRecord,
+	allTransactionsLock *sync.RWMutex,
+	keyVersionIndex *map[string]*[]string,
+	keyVersionIndexLock *sync.RWMutex,
+	pendingDeleteTransactions *map[string]int,
+	pendingDeleteTransactionsLock *sync.RWMutex,
+	pendingDeleteSockets *[]*zmq.Socket,
+	cm *consistency.ConsistencyManager,
+) {
+	for true {
+		time.Sleep(100 * time.Millisecond)
+
+		allTransactionsLock.RLock()
+		keys := make([]string, len(*allTransactions))
+		index := 0
+		for tid := range *allTransactions {
+			keys[index] = tid
+			index += 1
+		}
+		allTransactionsLock.RUnlock()
+
+		dominatedTransactions := &pb.TransactionIdList{}
+
+		for _, tid := range keys {
+			allTransactionsLock.RLock()
+			txn := (*allTransactions)[tid]
+			allTransactionsLock.RUnlock()
+
+			// We check if txn is nil because we want to make sure that we haven't
+			// already deleted this after making it pending.
+			if txn != nil && isTransactionDominated(txn, cm, keyVersionIndex, keyVersionIndexLock) {
+				dominatedTransactions.Ids = append(dominatedTransactions.Ids, tid)
+			}
+		}
+
+		if len(dominatedTransactions.Ids) > 0 {
+			// Add this TID to the pending delete metadata and notify all replicas.
+			for _, tid := range dominatedTransactions.Ids {
+				pendingDeleteTransactionsLock.Lock()
+				if _, ok := (*pendingDeleteTransactions)[tid]; !ok {
+					// Only 0 this out if we have not already marked it as pending
+					// to be deleted.
+					(*pendingDeleteTransactions)[tid] = 0
+				}
+				pendingDeleteTransactionsLock.Unlock()
+			}
+
+			bts, _ := proto.Marshal(dominatedTransactions)
+			for _, sckt := range *pendingDeleteSockets {
+				sckt.SendBytes(bts, zmq.DONTWAIT)
+			}
+		}
 	}
 }
 
 // A transaction is dominated if all the keys in its write set have versions
 // that are newer than the version from this transaction.
-func isTransactionDominated(transaction *pb.TransactionRecord, cm *consistency.ConsistencyManager, keyVersionIndex *map[string]*[]string) bool {
-	dominated := true
+func isTransactionDominated(
+	transaction *pb.TransactionRecord,
+	cm *consistency.ConsistencyManager,
+	keyVersionIndex *map[string]*[]string,
+	keyVersionIndexLock *sync.RWMutex,
+) bool {
 	for _, key := range transaction.WriteSet {
-		storageKey := (*cm).GetStorageKeyName(key, transaction.Timestamp, transaction.Id)
-		if !isKeyVersionDominated(key, storageKey, cm, keyVersionIndex) {
-			dominated = false
+		if !isKeyVersionDominated(key, transaction, cm, keyVersionIndex, keyVersionIndexLock) {
+			return false // If any key version is not dominated, return false.
 		}
 	}
 
-	return dominated
+	// If all key versions are dominated, we return true.
+	return true
 }
 
-func isKeyVersionDominated(key string, storageKey string, cm *consistency.ConsistencyManager, keyVersionIndex *map[string]*[]string) bool {
+func isKeyVersionDominated(
+	key string,
+	transaction *pb.TransactionRecord,
+	cm *consistency.ConsistencyManager,
+	keyVersionIndex *map[string]*[]string,
+	keyVersionIndexLock *sync.RWMutex,
+) bool {
 	// We know the key has to be in the index because we always add it when we
 	// hear about a new key.
+	storageKey := (*cm).GetStorageKeyName(key, transaction.Timestamp, transaction.Id)
+
+	keyVersionIndexLock.RLock()
 	index := (*keyVersionIndex)[key]
+	keyVersionIndexLock.RUnlock()
+
 	for _, other := range *index {
 		if (*cm).CompareKeys(other, storageKey) {
 			return true
