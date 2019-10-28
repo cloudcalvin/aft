@@ -167,7 +167,7 @@ func (s *AftServer) CommitTransaction(ctx context.Context, tag *pb.TransactionTa
 		s.UpdateBufferLock.RUnlock()
 
 		// Write updates to storage manager.
-		success := true
+		updateData := map[string]*pb.KeyValuePair{}
 		for _, update := range keyUpdates {
 			key := s.ConsistencyManager.GetStorageKeyName(update.key, txn.Timestamp, tid)
 			val := &pb.KeyValuePair{
@@ -178,15 +178,11 @@ func (s *AftServer) CommitTransaction(ctx context.Context, tag *pb.TransactionTa
 				Timestamp:     txn.Timestamp,
 			}
 
-			err := s.StorageManager.Put(key, val)
-
-			if err != nil {
-				success = false
-				break
-			}
+			updateData[key] = val
 		}
 
-		if !success {
+		err := s.StorageManager.MultiPut(&updateData)
+		if err != nil {
 			// TODO: Rollback the transaction.
 			txn.Status = pb.TransactionStatus_ABORTED
 		} else {
@@ -302,7 +298,7 @@ func main() {
 	pb.RegisterAftServer(server, aft)
 
 	// Start the multicast goroutine.
-	go MulticastRoutine(aft, config.IpAddress, config.ManagerAddress)
+	go MulticastRoutine(aft, config.IpAddress, config.ReplicaList, config.ManagerAddress)
 
 	// Start the local GC routine.
 	go LocalGCRoutine(aft)

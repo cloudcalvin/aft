@@ -16,8 +16,7 @@ const (
 	PushTemplate = "tcp://%s:%d"
 
 	// Ports to notify and be notified of new transactions.
-	TxnPullPort = 7777
-	TxnPushPort = 7778
+	TxnPort = 7777
 
 	// Ports to notify and be notified of pending transaction deletes.
 	PendingTxnDeletePullPort = 7779
@@ -48,7 +47,7 @@ func createSocket(tp zmq.Type, context *zmq.Context, address string, bind bool) 
 	return sckt
 }
 
-func MulticastRoutine(server *AftServer, ipAddress string, managerAddress string) {
+func MulticastRoutine(server *AftServer, ipAddress string, replicaList []string, managerAddress string) {
 	context, err := zmq.NewContext()
 	if err != nil {
 		fmt.Println("Unexpected error while creating ZeroMQ context. Exiting:\n", err)
@@ -56,8 +55,20 @@ func MulticastRoutine(server *AftServer, ipAddress string, managerAddress string
 	}
 
 	// Sockets to receive and send notifications about new transactions.
-	updatePuller := createSocket(zmq.PULL, context, fmt.Sprintf(PullTemplate, TxnPullPort), true)
-	updatePusher := createSocket(zmq.PUSH, context, fmt.Sprintf(PushTemplate, managerAddress, TxnPushPort), false)
+	updatePuller := createSocket(zmq.PULL, context, fmt.Sprintf(PullTemplate, TxnPort), true)
+	managerPusher := createSocket(zmq.PUSH, context, fmt.Sprintf(PushTemplate, managerAddress, TxnPort), false)
+
+	updatePushers := make([]*zmq.Socket, len(replicaList)-1)
+	index := 0
+	for _, replica := range replicaList {
+		if replica != ipAddress {
+			address := fmt.Sprintf(PushTemplate, replica, TxnPort)
+			fmt.Println("Connecting to ", address)
+			pusher := createSocket(zmq.PUSH, context, address, false)
+			updatePushers[index] = pusher
+			index += 1
+		}
+	}
 
 	// Sockets to receive and send notifications about pending transaction
 	// deletes.
@@ -211,8 +222,10 @@ func MulticastRoutine(server *AftServer, ipAddress string, managerAddress string
 					continue
 				}
 
-				fmt.Printf("Sending %d records.\n", len(message.Records))
-				updatePusher.SendBytes(bts, zmq.DONTWAIT)
+				for _, pusher := range updatePushers {
+					pusher.SendBytes(bts, zmq.DONTWAIT)
+				}
+				managerPusher.SendBytes(bts, zmq.DONTWAIT)
 			}
 
 			reportStart = time.Now()

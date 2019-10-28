@@ -80,6 +80,17 @@ func (redis *RedisStorageManager) Put(key string, val *pb.KeyValuePair) error {
 	return redis.client.Set(key, serialized, 0).Err()
 }
 
+func (redis *RedisStorageManager) MultiPut(data *map[string]*pb.KeyValuePair) error {
+	for key, val := range *data {
+		err := redis.Put(key, val)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (redis *RedisStorageManager) Delete(key string) error {
 	return redis.client.Del(key).Err()
 }

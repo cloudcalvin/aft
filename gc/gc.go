@@ -22,8 +22,7 @@ const (
 	PullTemplate = "tcp://*:%d"
 
 	// Ports to notify and be notified of new transactions.
-	TxnPushPort = 7777
-	TxnPullPort = 7778
+	TxnPort = 7777
 
 	// Ports to notify and be notified of pending transaction deletes.
 	PendingTxnDeletePushPort = 7779
@@ -91,18 +90,18 @@ func main() {
 
 	replicas := strings.Split(*replicaList, ",")
 	numReplicas := len(replicas) - 1
-	txnUpdateSockets := make([]*zmq.Socket, numReplicas)
+	// txnUpdateSockets := make([]*zmq.Socket, numReplicas)
 	pendingDeleteSockets := make([]*zmq.Socket, numReplicas)
 	deleteSockets := make([]*zmq.Socket, numReplicas)
 
 	for index, replica := range replicas {
 		if index < numReplicas { // Skip the last replica because it's an empty string.
-			txnUpdateAddress := fmt.Sprintf(PushTemplate, replica, TxnPushPort)
-			socket := createSocket(zmq.PUSH, context, txnUpdateAddress, false)
-			txnUpdateSockets[index] = socket
+			// txnUpdateAddress := fmt.Sprintf(PushTemplate, replica, TxnPushPort)
+			// socket := createSocket(zmq.PUSH, context, txnUpdateAddress, false)
+			// txnUpdateSockets[index] = socket
 
 			pendingDeleteAddress := fmt.Sprintf(PushTemplate, replica, PendingTxnDeletePushPort)
-			socket = createSocket(zmq.PUSH, context, pendingDeleteAddress, false)
+			socket := createSocket(zmq.PUSH, context, pendingDeleteAddress, false)
 			pendingDeleteSockets[index] = socket
 
 			deleteAddress := fmt.Sprintf(PushTemplate, replica, TxnDeletePushPort)
@@ -111,7 +110,7 @@ func main() {
 		}
 	}
 
-	txnUpdatePuller := createSocket(zmq.PULL, context, fmt.Sprintf(PullTemplate, TxnPullPort), true)
+	txnUpdatePuller := createSocket(zmq.PULL, context, fmt.Sprintf(PullTemplate, TxnPort), true)
 	pendingDeletePuller := createSocket(zmq.PULL, context, fmt.Sprintf(PullTemplate, PendingTxnDeletePullPort), true)
 
 	poller := zmq.NewPoller()
@@ -133,7 +132,7 @@ func main() {
 
 	newTransactions := []*pb.TransactionRecord{}
 
-	reportStart := time.Now()
+	// reportStart := time.Now()
 	for true {
 		// Wait a 100ms for a new message; we know by default that there is only
 		// one socket to poll, so we don't have to check which socket we've
@@ -212,32 +211,32 @@ func main() {
 			}
 		}
 
-		reportEnd := time.Now()
+		// reportEnd := time.Now()
 
 		// Broadcast out all new transactions every second. If any transaction has
 		// been dominated, drop it from the list.
-		if reportEnd.Sub(reportStart).Seconds() > 1.0 {
+		// if reportEnd.Sub(reportStart).Seconds() > 1.0 {
 
-			if len(newTransactions) > 0 {
-				list := &pb.TransactionList{}
-				list.Records = append(list.Records, newTransactions...)
+		// 	if len(newTransactions) > 0 {
+		// 		list := &pb.TransactionList{}
+		// 		list.Records = append(list.Records, newTransactions...)
 
-				newTransactions = []*pb.TransactionRecord{}
+		// 		newTransactions = []*pb.TransactionRecord{}
 
-				// Send the new transactions to all the replicas.
-				message, err := proto.Marshal(list)
-				if err != nil {
-					fmt.Println("Unexpected error while marshaling TransactionList protobuf:\n", err)
-					continue
-				}
+		// 		// Send the new transactions to all the replicas.
+		// 		message, err := proto.Marshal(list)
+		// 		if err != nil {
+		// 			fmt.Println("Unexpected error while marshaling TransactionList protobuf:\n", err)
+		// 			continue
+		// 		}
 
-				for _, socket := range txnUpdateSockets {
-					socket.SendBytes(message, zmq.DONTWAIT)
-				}
-			}
+		// 		for _, socket := range txnUpdateSockets {
+		// 			socket.SendBytes(message, zmq.DONTWAIT)
+		// 		}
+		// 	}
 
-			reportStart = time.Now()
-		}
+		// 	reportStart = time.Now()
+		// }
 	}
 }
 

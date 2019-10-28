@@ -102,6 +102,52 @@ func (dynamo *DynamoStorageManager) Put(key string, val *pb.KeyValuePair) error 
 	return err
 }
 
+func (dynamo *DynamoStorageManager) MultiPut(data *map[string]*pb.KeyValuePair) error {
+	inputData := map[string][]*awsdynamo.WriteRequest{}
+	inputData[dynamo.dataTable] = []*awsdynamo.WriteRequest{}
+
+	numWrites := 0
+	for key, val := range *data {
+		serialized, err := proto.Marshal(val)
+		if err != nil {
+			return err
+		}
+
+		keyData := map[string]*awsdynamo.AttributeValue{
+			"DataKey": {
+				S: aws.String(key),
+			},
+			"Value": {
+				B: serialized,
+			},
+		}
+
+		putReq := &awsdynamo.PutRequest{Item: keyData}
+		inputData[dynamo.dataTable] = append(inputData[dynamo.dataTable], &awsdynamo.WriteRequest{PutRequest: putReq})
+
+		// DynamoDB's BatchWriteItem only supports 25 writes at a time, so if we
+		// have more than that, we break it up.
+		numWrites += 1
+		if numWrites == 25 {
+			_, err := dynamo.dynamoClient.BatchWriteItem(&awsdynamo.BatchWriteItemInput{RequestItems: inputData})
+			if err != nil {
+				return err
+			}
+
+			inputData = map[string][]*awsdynamo.WriteRequest{}
+			inputData[dynamo.dataTable] = []*awsdynamo.WriteRequest{}
+			numWrites = 0
+		}
+	}
+
+	if len(inputData[dynamo.dataTable]) > 0 {
+		_, err := dynamo.dynamoClient.BatchWriteItem(&awsdynamo.BatchWriteItemInput{RequestItems: inputData})
+		return err
+	}
+
+	return nil
+}
+
 func (dynamo *DynamoStorageManager) Delete(key string) error {
 	input := &awsdynamo.DeleteItemInput{
 		Key:       *constructKeyData(key),

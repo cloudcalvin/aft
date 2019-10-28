@@ -25,6 +25,10 @@ type StorageManager interface {
 	// the storage engine.
 	Put(key string, val *pb.KeyValuePair) error
 
+	// As a part of transaction owned by tid, insert a set of key-value pairs
+	// into the storage engine.
+	MultiPut(*map[string]*pb.KeyValuePair) error
+
 	// Retrieve the given key as a part of the transaction tid.
 	Get(key string) (*pb.KeyValuePair, error)
 

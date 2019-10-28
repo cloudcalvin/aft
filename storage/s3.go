@@ -110,6 +110,17 @@ func (s3 *S3StorageManager) Put(key string, val *pb.KeyValuePair) error {
 	return err
 }
 
+func (s3 *S3StorageManager) MultiPut(data *map[string]*pb.KeyValuePair) error {
+	for key, val := range *data {
+		err := s3.Put(key, val)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (s3 *S3StorageManager) Delete(key string) error {
 	input := &awss3.DeleteObjectInput{
 		Bucket: &s3.bucket,
