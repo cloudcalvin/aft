@@ -18,6 +18,7 @@ def main():
         num_threads = int(splits[0])
         num_requests = int(splits[1])
         replicas = splits[2]
+        print(replicas)
 
         cmd = [
             './benchmark',

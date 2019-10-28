@@ -63,7 +63,6 @@ func MulticastRoutine(server *AftServer, ipAddress string, replicaList []string,
 	for _, replica := range replicaList {
 		if replica != ipAddress {
 			address := fmt.Sprintf(PushTemplate, replica, TxnPort)
-			fmt.Println("Connecting to ", address)
 			pusher := createSocket(zmq.PUSH, context, address, false)
 			updatePushers[index] = pusher
 			index += 1
@@ -102,6 +101,7 @@ func MulticastRoutine(server *AftServer, ipAddress string, replicaList []string,
 			switch s := socket.Socket; s {
 			case updatePuller:
 				{
+					fmt.Println("Received an update")
 					bts, _ := updatePuller.RecvBytes(zmq.DONTWAIT)
 
 					newTransactions := &pb.TransactionList{}
@@ -116,8 +116,10 @@ func MulticastRoutine(server *AftServer, ipAddress string, replicaList []string,
 					unseenTransactions := &pb.TransactionList{}
 					for _, record := range newTransactions.Records {
 						if _, ok := seenTransactions[record.Id]; !ok {
-							unseenTransactions.Records = append(unseenTransactions.Records, record)
-							seenTransactions[record.Id] = true
+							if !isTransactionDominated(record, server) {
+								unseenTransactions.Records = append(unseenTransactions.Records, record)
+								seenTransactions[record.Id] = true
+							}
 						}
 					}
 
@@ -125,6 +127,7 @@ func MulticastRoutine(server *AftServer, ipAddress string, replicaList []string,
 				}
 			case pendingDeletePuller:
 				{
+					fmt.Println("Received a pending delete")
 					bts, _ := pendingDeletePuller.RecvBytes(zmq.DONTWAIT)
 
 					pendingDeleteIds := &pb.TransactionIdList{}
@@ -136,8 +139,6 @@ func MulticastRoutine(server *AftServer, ipAddress string, replicaList []string,
 					fmt.Printf("Received %d transaction IDs for pending deletes.\n", len(pendingDeleteIds.Ids))
 
 					validDeleteIds := &pb.TransactionIdList{}
-					zeroDepsCount := 0
-					depsAverage := 0
 					for _, id := range pendingDeleteIds.Ids {
 						// Make sure we don't delete a transaction we haven't seen before.
 						if _, ok := seenTransactions[id]; ok {
@@ -153,25 +154,23 @@ func MulticastRoutine(server *AftServer, ipAddress string, replicaList []string,
 								validDeleteIds.Ids = append(validDeleteIds.Ids, id)
 								deletedMarkedTransactions[id] = true
 							}
-						}
-
-						server.TransactionDependenciesLock.RLock()
-						if server.TransactionDependencies[id] <= 0 {
-							zeroDepsCount += 1
 						} else {
-							depsAverage += server.TransactionDependencies[id]
+							// If we haven't seen it before, we know it'll be dominated by
+							// what we receive, so we mark it locally and just ignore it if
+							// it ever arrives.
+							seenTransactions[id] = true
+							deletedMarkedTransactions[id] = true
+
+							validDeleteIds.Ids = append(validDeleteIds.Ids, id)
 						}
-						server.TransactionDependenciesLock.RUnlock()
 					}
 
-					average := float64(depsAverage) / float64(len(pendingDeleteIds.Ids)-len(validDeleteIds.Ids))
-
-					fmt.Printf("Received %d pending deletes and determined %d of them were valid---%d of them had <= 0 dependencies; of there there was an average of %f.\n", len(pendingDeleteIds.Ids), len(validDeleteIds.Ids), zeroDepsCount, average)
 					bts, _ = proto.Marshal(validDeleteIds)
 					pendingDeletePusher.SendBytes(bts, zmq.DONTWAIT)
 				}
 			case deletePuller:
 				{
+					fmt.Println("Received a delete")
 					bts, _ := deletePuller.RecvBytes(zmq.DONTWAIT)
 
 					deleteIds := &pb.TransactionIdList{}
@@ -204,19 +203,30 @@ func MulticastRoutine(server *AftServer, ipAddress string, replicaList []string,
 		if reportEnd.Sub(reportStart).Seconds() > 1.0 {
 			// Lock the mutex, serialize the newly committed transactions, and unlock.
 			server.FinishedTransactionLock.RLock()
-			message := pb.TransactionList{}
+			replicaMessage := pb.TransactionList{}
+			gcMessage := pb.TransactionList{}
 
 			for tid := range server.FinishedTransactions {
 				if _, ok := seenTransactions[tid]; !ok {
 					record := server.FinishedTransactions[tid]
-					message.Records = append(message.Records, record)
+
+					server.LocallyDeletedTransactionsLock.RLock()
+					_, ok := server.LocallyDeletedTransactions[tid]
+					server.LocallyDeletedTransactionsLock.RUnlock()
+
+					// Only send this message to other replicas if it's not already dominated.
+					if !ok {
+						replicaMessage.Records = append(replicaMessage.Records, record)
+					}
+
+					gcMessage.Records = append(gcMessage.Records, record)
 					seenTransactions[tid] = true
 				}
 			}
 			server.FinishedTransactionLock.RUnlock()
 
-			if len(message.Records) > 0 {
-				bts, err := proto.Marshal(&message)
+			if len(replicaMessage.Records) > 0 {
+				bts, err := proto.Marshal(&replicaMessage)
 				if err != nil {
 					fmt.Println("Unexpected error while marshaling Protobufs:\n", err)
 					continue
@@ -225,6 +235,15 @@ func MulticastRoutine(server *AftServer, ipAddress string, replicaList []string,
 				for _, pusher := range updatePushers {
 					pusher.SendBytes(bts, zmq.DONTWAIT)
 				}
+			}
+
+			if len(gcMessage.Records) > 0 {
+				bts, err := proto.Marshal(&gcMessage)
+				if err != nil {
+					fmt.Println("Unexpected error while marshaling Protobufs:\n", err)
+					continue
+				}
+
 				managerPusher.SendBytes(bts, zmq.DONTWAIT)
 			}
 
@@ -235,28 +254,19 @@ func MulticastRoutine(server *AftServer, ipAddress string, replicaList []string,
 
 func LocalGCRoutine(server *AftServer) {
 	for true {
-		// Run the GC routine every 100ms.
-		// time.Sleep(10 * time.Millisecond)
-
 		dominatedTransactions := map[string]*pb.TransactionRecord{}
 
 		// We create a local copy of the keys so that we don't modify the list
 		// while we are iterating over it. Otherwise, we'd have to RLock for the
 		// whole GC duration.
 		server.FinishedTransactionLock.RLock()
-		keys := make([]string, len(server.FinishedTransactions))
-		index := 0
+		finished := map[string]*pb.TransactionRecord{}
 		for tid := range server.FinishedTransactions {
-			keys[index] = tid
-			index += 1
+			finished[tid] = server.FinishedTransactions[tid]
 		}
 		server.FinishedTransactionLock.RUnlock()
 
-		for _, tid := range keys {
-			server.FinishedTransactionLock.RLock()
-			txn := server.FinishedTransactions[tid]
-			server.FinishedTransactionLock.RUnlock()
-
+		for tid, txn := range finished {
 			if txn != nil && isTransactionDominated(txn, server) {
 				server.LocallyDeletedTransactionsLock.RLock()
 				if _, ok := server.LocallyDeletedTransactions[tid]; !ok {
@@ -275,17 +285,18 @@ func LocalGCRoutine(server *AftServer) {
 			}
 		}
 
-		go transactionClearRoutine(&dominatedTransactions, server)
-
+		if len(dominatedTransactions) > 0 {
+			go transactionClearRoutine(dominatedTransactions, server)
+		}
 	}
 }
 
-func transactionClearRoutine(dominatedTransactions *map[string]*pb.TransactionRecord, server *AftServer) {
+func transactionClearRoutine(dominatedTransactions map[string]*pb.TransactionRecord, server *AftServer) {
 	// Delete all of the key version index data, then clean up committed
 	// transactions and the read cache.
 	cachedKeys := []string{}
-	for dominatedTid := range *dominatedTransactions {
-		txn := (*dominatedTransactions)[dominatedTid]
+	for dominatedTid := range dominatedTransactions {
+		txn := dominatedTransactions[dominatedTid]
 		for _, key := range txn.WriteSet {
 			keyVersion := server.ConsistencyManager.GetStorageKeyName(key, txn.Timestamp, txn.Id)
 
@@ -299,7 +310,7 @@ func transactionClearRoutine(dominatedTransactions *map[string]*pb.TransactionRe
 		}
 	}
 
-	for tid := range *dominatedTransactions {
+	for tid := range dominatedTransactions {
 		server.LocallyDeletedTransactionsLock.Lock()
 		server.LocallyDeletedTransactions[tid] = true
 		server.LocallyDeletedTransactionsLock.Unlock()
@@ -327,10 +338,15 @@ func isTransactionDominated(transaction *pb.TransactionRecord, server *AftServer
 }
 
 func isKeyVersionDominated(key string, transaction *pb.TransactionRecord, server *AftServer) bool {
-	// We know the key has to be in the index because we always add it when we
-	// hear about a new key.
+	// We might not have heard of this key; if so, it can't be determined to be
+	// dominated.
 	server.KeyVersionIndexLock.RLock()
-	index := server.KeyVersionIndex[key]
+	index, ok := server.KeyVersionIndex[key]
+	if !ok {
+		server.KeyVersionIndexLock.RUnlock()
+		return false
+	}
+
 	keyList := make([]string, len(*index))
 
 	idx := 0

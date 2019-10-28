@@ -3,10 +3,10 @@ package consistency
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	pb "github.com/vsreekanti/aft/proto/aft"
 )
@@ -19,6 +19,13 @@ const (
 
 func (racm *ReadAtomicConsistencyManager) ValidateTransaction(tid string, readSet map[string]string, writeSet []string) bool {
 	return true
+}
+
+type KeyVersionMetadata struct {
+	id        string
+	timestamp int64
+	version   string
+	cached    bool
 }
 
 func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
@@ -118,36 +125,48 @@ func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
 	kvList, ok := (*keyVersionIndex)[key]
 
 	if !ok || len(*kvList) == 0 {
+		keyVersionIndexLock.RUnlock()
 		return "", errors.New(fmt.Sprintf("There are no versions of key %s.", key))
 	}
 
-	keyVersions := map[string]bool{}
-	for kv, _ := range *kvList {
-		keyVersions[kv] = (*kvList)[kv]
+	versionMetadata := make([]KeyVersionMetadata, len(*kvList))
+	index := 0
+
+	for kv := range *kvList {
+		tts, tid := splitKey(kv)
+		versionMetadata[index] = KeyVersionMetadata{id: tid, timestamp: tts, version: kv, cached: (*kvList)[kv]}
+		index += 1
 	}
 	keyVersionIndexLock.RUnlock()
+
+	// Sort versionMetadata in reverse order.
+	sort.Slice(versionMetadata, func(i int, j int) bool {
+		return versionMetadata[i].timestamp > versionMetadata[j].timestamp ||
+			(versionMetadata[i].timestamp == versionMetadata[j].timestamp &&
+				versionMetadata[i].id > versionMetadata[j].id)
+	})
 
 	// The current implementation is conservative. It only returns versions that
 	// are older than things we've already read.
 	latest := ""
 	isCached := false
 
-	for keyVersion := range keyVersions {
+	for _, keyVersion := range versionMetadata {
 		validVersion := true
-		_, keyTxnId := splitKey(keyVersion)
 
 		finishedTransactionsLock.RLock()
-		keyTxn := (*finishedTransactions)[keyTxnId]
+		keyTxn := (*finishedTransactions)[keyVersion.id]
 		finishedTransactionsLock.RUnlock()
 
 		// Check to see if this keyVersion is older than all of the keys that we
 		// have already read.
 		for read := range transaction.ReadSet {
 			readVersion := racm.GetStorageKeyName(read, transaction.Timestamp, transaction.Id)
-			if !racm.CompareKeys(readVersion, keyVersion) {
+			if !racm.CompareKeys(readVersion, keyVersion.version) {
 				for _, cowritten := range keyTxn.WriteSet {
 					if cowritten == readVersion {
 						validVersion = false
+						break
 					}
 				}
 
@@ -157,20 +176,19 @@ func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
 			}
 		}
 
-		// If the version is valid and is newer than we have already seen as the
-		// latest, we update the latest version; we choose to reject it if we have
-		// an older version that is cached locally.
-		if validVersion && (len(latest) == 0 || racm.CompareKeys(keyVersion, latest)) {
-			if keyVersions[keyVersion] || !isCached {
-				latest = keyVersion
-				isCached = keyVersions[keyVersion]
-			}
+		// If we've seen nothing valid before, just pick the first valid thing
+		// we've seen.
+		// Alternately, if we find something slightly older that is cached, we
+		// use that instead.
+		if validVersion && (len(latest) == 0 || (keyVersion.cached && !isCached)) {
+			latest = keyVersion.version
+			isCached = keyVersion.cached
 		}
 
-		// If we've found a cached version less than 2 seconds old, just return it.
-		latestTs, _ := splitKey(latest)
-		threshold := (4 * time.Second).Nanoseconds()
-		if isCached && (time.Now().UnixNano()-latestTs) < threshold {
+		// If we've found a cached key or looked at more than 10 versions and
+		// haven't found a cached one, we just return immediately, as long as
+		// something is valid.
+		if isCached || (index >= 10 && len(latest) > 0) {
 			break
 		}
 	}
