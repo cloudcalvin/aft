@@ -92,16 +92,12 @@ func MulticastRoutine(server *AftServer, ipAddress string, replicaList []string,
 
 	reportStart := time.Now()
 	for true {
-		// Wait a 100ms for a new message; we know by default that there is only
-		// one socket to poll, so we don't have to check which socket we've
-		// received a message on.
 		sockets, _ := poller.Poll(10 * time.Millisecond)
 
 		for _, socket := range sockets {
 			switch s := socket.Socket; s {
 			case updatePuller:
 				{
-					fmt.Println("Received an update")
 					bts, _ := updatePuller.RecvBytes(zmq.DONTWAIT)
 
 					newTransactions := &pb.TransactionList{}
@@ -116,9 +112,10 @@ func MulticastRoutine(server *AftServer, ipAddress string, replicaList []string,
 					unseenTransactions := &pb.TransactionList{}
 					for _, record := range newTransactions.Records {
 						if _, ok := seenTransactions[record.Id]; !ok {
+							seenTransactions[record.Id] = true
+
 							if !isTransactionDominated(record, server) {
 								unseenTransactions.Records = append(unseenTransactions.Records, record)
-								seenTransactions[record.Id] = true
 							}
 						}
 					}
@@ -170,7 +167,6 @@ func MulticastRoutine(server *AftServer, ipAddress string, replicaList []string,
 				}
 			case deletePuller:
 				{
-					fmt.Println("Received a delete")
 					bts, _ := deletePuller.RecvBytes(zmq.DONTWAIT)
 
 					deleteIds := &pb.TransactionIdList{}
@@ -179,17 +175,13 @@ func MulticastRoutine(server *AftServer, ipAddress string, replicaList []string,
 						fmt.Println("Unexpected error while deserializing Protobufs:\n", err)
 						continue
 					}
-					fmt.Printf("Received %d transaction IDs for successful deletes.\n", len(deleteIds.Ids))
+					// fmt.Printf("Received %d transaction IDs for successful deletes.\n", len(deleteIds.Ids))
 
 					// Delete the successfully deleted IDs from our local seen
 					// transactions metadata.
 					for _, id := range deleteIds.Ids {
 						delete(seenTransactions, id)
 						delete(deletedMarkedTransactions, id)
-
-						server.FinishedTransactionLock.Lock()
-						delete(server.FinishedTransactions, id)
-						server.FinishedTransactionLock.Unlock()
 
 						server.LocallyDeletedTransactionsLock.Lock()
 						delete(server.LocallyDeletedTransactions, id)
@@ -314,6 +306,14 @@ func transactionClearRoutine(dominatedTransactions map[string]*pb.TransactionRec
 		server.LocallyDeletedTransactionsLock.Lock()
 		server.LocallyDeletedTransactions[tid] = true
 		server.LocallyDeletedTransactionsLock.Unlock()
+
+		server.FinishedTransactionLock.Lock()
+		delete(server.FinishedTransactions, tid)
+		server.FinishedTransactionLock.Unlock()
+
+		server.TransactionDependenciesLock.Lock()
+		delete(server.TransactionDependencies, tid)
+		server.TransactionDependenciesLock.Unlock()
 	}
 
 	// Consider moving these locks inside the loop.
@@ -340,30 +340,14 @@ func isTransactionDominated(transaction *pb.TransactionRecord, server *AftServer
 func isKeyVersionDominated(key string, transaction *pb.TransactionRecord, server *AftServer) bool {
 	// We might not have heard of this key; if so, it can't be determined to be
 	// dominated.
-	server.KeyVersionIndexLock.RLock()
-	index, ok := server.KeyVersionIndex[key]
+	server.LatestVersionIndexLock.RLock()
+	latest, ok := server.LatestVersionIndex[key]
+	server.LatestVersionIndexLock.RUnlock()
+
 	if !ok {
-		server.KeyVersionIndexLock.RUnlock()
 		return false
 	}
 
-	keyList := make([]string, len(*index))
-
-	idx := 0
-	for key := range *index {
-		keyList[idx] = key
-		idx += 1
-	}
-	server.KeyVersionIndexLock.RUnlock()
-
 	storageKey := server.ConsistencyManager.GetStorageKeyName(key, transaction.Timestamp, transaction.Id)
-
-	for _, other := range keyList {
-		// We return true if *any* key dominates this one, so we can short circuit.
-		if server.ConsistencyManager.CompareKeys(other, storageKey) {
-			return true
-		}
-	}
-
-	return false
+	return server.ConsistencyManager.CompareKeys(latest, storageKey)
 }

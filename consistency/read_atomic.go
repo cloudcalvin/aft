@@ -49,6 +49,8 @@ func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
 	latestVersion, ok := (*latestVersionIndex)[key]
 	latestVersionIndexLock.RUnlock()
 
+	// Check to see if the most recent version is valid, and if so return it
+	// immediately.
 	if ok {
 		_, latestTxnId := splitKey(latestVersion)
 		finishedTransactionsLock.RLock()
@@ -85,14 +87,16 @@ func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
 	// Check if the key version is constrained by any of the keys we've already
 	// read.
 	constraintSet := []string{}
-	for read := range transaction.ReadSet {
+	for _, fullName := range transaction.ReadSet {
+		_, tid := splitKey(fullName)
 		// We ignore the boolean because we are guaranteed to have the key in the
 		// readCache.
-		fullName, _ := transaction.ReadSet[read]
-		_, tid := splitKey(fullName)
 		finishedTransactionsLock.RLock()
-		txn, _ := (*finishedTransactions)[tid]
+		txn, ok := (*finishedTransactions)[tid]
 		finishedTransactionsLock.RUnlock()
+		if !ok {
+			return "", errors.New(fmt.Sprintf("Unexpected metadata loss."))
+		}
 
 		for _, cowritten := range txn.WriteSet {
 			if key == cowritten {
@@ -103,39 +107,46 @@ func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
 
 	// Pick the latest timestamp in the constraint set if there are any keys in
 	// it.
+	constraintEarliest := ""
 	if len(constraintSet) > 0 {
-		latest := constraintSet[0]
+		constraintEarliest := constraintSet[0]
 
 		for _, constraint := range constraintSet {
-			if racm.CompareKeys(constraint, latest) {
-				latest = constraint
+			if racm.CompareKeys(constraint, constraintEarliest) {
+				constraintEarliest = constraint
 			}
 		}
-
-		racm.UpdateTransactionDependencies(latest, false, transactionDependencies, transactionDependenciesLock)
-		return latest, nil
 	}
-
-	// Retrieve a version of the key that is no newer than the transaction than
-	// the oldest transaction we have read. If there's no such version, then look
-	// at newer versions---if anything conflicts, we abort.
 
 	// Retrieve all of the versions available for this key.
 	keyVersionIndexLock.RLock()
 	kvList, ok := (*keyVersionIndex)[key]
 
 	if !ok || len(*kvList) == 0 {
-		keyVersionIndexLock.RUnlock()
-		return "", errors.New(fmt.Sprintf("There are no versions of key %s.", key))
+		if len(constraintEarliest) == 0 { // We don't know about any other keys, so if there were no constraints, we return an error.
+			keyVersionIndexLock.RUnlock()
+			return "", errors.New(fmt.Sprintf("There are no versions of key %s.", key))
+		} else { // Otherwise, we return the constraint.
+			racm.UpdateTransactionDependencies(constraintEarliest, false, transactionDependencies, transactionDependenciesLock)
+			return constraintEarliest, nil
+		}
 	}
 
 	versionMetadata := make([]KeyVersionMetadata, len(*kvList))
 	index := 0
 
+	// Construct the set of keys that are newer than the constraint earliest (or
+	// all keys if no constraints are present) that we will iterate over.
 	for kv := range *kvList {
-		tts, tid := splitKey(kv)
-		versionMetadata[index] = KeyVersionMetadata{id: tid, timestamp: tts, version: kv, cached: (*kvList)[kv]}
-		index += 1
+		if constraintEarliest == "" || racm.CompareKeys(constraintEarliest, kv) {
+			tts, tid := splitKey(kv)
+			versionMetadata[index] = KeyVersionMetadata{id: tid, timestamp: tts, version: kv, cached: (*kvList)[kv]}
+			index += 1
+
+			if index > 5000 {
+				break // We only consider 5000 key versions.
+			}
+		}
 	}
 	keyVersionIndexLock.RUnlock()
 
@@ -146,8 +157,6 @@ func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
 				versionMetadata[i].id > versionMetadata[j].id)
 	})
 
-	// The current implementation is conservative. It only returns versions that
-	// are older than things we've already read.
 	latest := ""
 	isCached := false
 
@@ -158,8 +167,8 @@ func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
 		keyTxn := (*finishedTransactions)[keyVersion.id]
 		finishedTransactionsLock.RUnlock()
 
-		// Check to see if this keyVersion is older than all of the keys that we
-		// have already read.
+		// Check to see if this version has any write conflicts with what we've
+		// already written.
 		for read := range transaction.ReadSet {
 			readVersion := racm.GetStorageKeyName(read, transaction.Timestamp, transaction.Id)
 			if !racm.CompareKeys(readVersion, keyVersion.version) {
@@ -177,9 +186,8 @@ func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
 		}
 
 		// If we've seen nothing valid before, just pick the first valid thing
-		// we've seen.
-		// Alternately, if we find something slightly older that is cached, we
-		// use that instead.
+		// we've seen. Alternately, if we find something slightly older that is
+		// cached, we use that instead.
 		if validVersion && (len(latest) == 0 || (keyVersion.cached && !isCached)) {
 			latest = keyVersion.version
 			isCached = keyVersion.cached
@@ -188,13 +196,17 @@ func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
 		// If we've found a cached key or looked at more than 10 versions and
 		// haven't found a cached one, we just return immediately, as long as
 		// something is valid.
-		if isCached || (index >= 10 && len(latest) > 0) {
+		if isCached || ((index >= 10 && len(latest) > 0) && len(constraintEarliest) > 0) {
 			break
 		}
 	}
 
 	if len(latest) == 0 {
-		return "", errors.New(fmt.Sprintf("There are no valid versions of key %s.", key))
+		if len(constraintEarliest) == 0 { // If we found no valid keys and no constraints, we return an error.
+			return "", errors.New(fmt.Sprintf("There are no valid versions of key %s.", key))
+		} else { // If we just found no valid keys newer than the constraint, we just return the constraint.
+			latest = constraintEarliest
+		}
 	}
 
 	racm.UpdateTransactionDependencies(latest, false, transactionDependencies, transactionDependenciesLock)
@@ -233,16 +245,6 @@ func (racm *ReadAtomicConsistencyManager) GetStorageKeyName(key string, timestam
 // argument `one` is newer than the key passed in as argument `two`. It returns
 // false otherwise.
 func (racm *ReadAtomicConsistencyManager) CompareKeys(one string, two string) bool {
-	if one[0] == '/' {
-		rn := []rune(one)
-		one = string(rn[1:len(rn)])
-	}
-
-	if two[0] == '/' {
-		rn := []rune(two)
-		two = string(rn[1:len(rn)])
-	}
-
 	oneTs, oneTid := splitKey(one)
 	twoTs, twoTid := splitKey(two)
 

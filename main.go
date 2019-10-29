@@ -106,9 +106,11 @@ func (s *AftServer) Read(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyR
 			}
 
 			// If we've read the key version before, return that version.
-			s.ReadCacheLock.RLock()
-			val, ok := s.ReadCache[key]
-			s.ReadCacheLock.RUnlock()
+			//s.ReadCacheLock.RLock()
+			//val, ok := s.ReadCache[key]
+			//s.ReadCacheLock.RUnlock()
+			val := &pb.KeyValuePair{}
+			ok := false
 
 			if ok {
 				returnValue = val.Value
@@ -118,7 +120,7 @@ func (s *AftServer) Read(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyR
 				// If the GET request returns an error, that means the key was not
 				// accessible, so we return nil.
 				if err != nil {
-					return &pb.KeyRequest{}, err
+					return resp, err
 				} else { // Otherwise, add this key to our read cache.
 					s.ReadCacheLock.Lock()
 					s.ReadCache[key] = *kvPair
@@ -263,15 +265,15 @@ func (s *AftServer) updateKeyVersionIndex(transaction *pb.TransactionRecord) {
 		s.KeyVersionIndexLock.RLock()
 		index, ok := s.KeyVersionIndex[key]
 		s.KeyVersionIndexLock.RUnlock()
-		if !ok {
-			index = &map[string]bool{}
-			s.KeyVersionIndexLock.Lock()
-			s.KeyVersionIndex[key] = index
-			s.KeyVersionIndexLock.Unlock()
-		}
 
 		s.KeyVersionIndexLock.Lock()
-		(*s.KeyVersionIndex[key])[kvName] = false
+		if !ok {
+			index = &map[string]bool{}
+			(*index)[kvName] = false
+			s.KeyVersionIndex[key] = index
+		} else {
+			(*s.KeyVersionIndex[key])[kvName] = false
+		}
 		s.KeyVersionIndexLock.Unlock()
 
 		s.LatestVersionIndexLock.Lock()

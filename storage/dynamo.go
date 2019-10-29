@@ -69,6 +69,7 @@ func (dynamo *DynamoStorageManager) Get(key string) (*pb.KeyValuePair, error) {
 	}
 
 	bts := item.Item["Value"].B
+	fmt.Println(item.ConsumedCapacity)
 	err = proto.Unmarshal(bts, result)
 	return result, err
 }
@@ -97,7 +98,8 @@ func (dynamo *DynamoStorageManager) Put(key string, val *pb.KeyValuePair) error 
 	}
 
 	input := constructPutInput(key, dynamo.dataTable, serialized)
-	_, err = dynamo.dynamoClient.PutItem(input)
+	resp, err := dynamo.dynamoClient.PutItem(input)
+	fmt.Println(resp.ConsumedCapacity)
 
 	return err
 }
@@ -141,7 +143,8 @@ func (dynamo *DynamoStorageManager) MultiPut(data *map[string]*pb.KeyValuePair) 
 	}
 
 	if len(inputData[dynamo.dataTable]) > 0 {
-		_, err := dynamo.dynamoClient.BatchWriteItem(&awsdynamo.BatchWriteItemInput{RequestItems: inputData})
+		resp, err := dynamo.dynamoClient.BatchWriteItem(&awsdynamo.BatchWriteItemInput{RequestItems: inputData})
+		fmt.Println(resp.ConsumedCapacity)
 		return err
 	}
 

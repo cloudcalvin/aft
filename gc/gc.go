@@ -72,15 +72,15 @@ func main() {
 		consistencyManager = &consistency.ReadAtomicConsistencyManager{}
 	}
 
-	// var storageManager storage.StorageManager
-	// switch conf.StorageType {
-	// case "s3":
-	// 	storageManager = storage.NewS3StorageManager("vsreekanti")
-	// case "dynamo":
-	// 	storageManager = storage.NewDynamoStorageManager("AftData", "AftData")
-	// case "redis":
-	// 	storageManager = storage.NewRedisStorageManager("aft-test.kxmfgs.clustercfg.use1.cache.amazonaws.com:6379", "")
-	// }
+	var storageManager storage.StorageManager
+	switch conf.StorageType {
+	case "s3":
+		storageManager = storage.NewS3StorageManager("vsreekanti")
+	case "dynamo":
+		storageManager = storage.NewDynamoStorageManager("AftData", "AftData")
+	case "redis":
+		storageManager = storage.NewRedisStorageManager("aft-test.kxmfgs.clustercfg.use1.cache.amazonaws.com:6379", "")
+	}
 
 	context, err := zmq.NewContext()
 	if err != nil {
@@ -90,18 +90,18 @@ func main() {
 
 	replicas := strings.Split(*replicaList, ",")
 	numReplicas := len(replicas) - 1
-	// txnUpdateSockets := make([]*zmq.Socket, numReplicas)
+	txnUpdateSockets := make([]*zmq.Socket, numReplicas)
 	pendingDeleteSockets := make([]*zmq.Socket, numReplicas)
 	deleteSockets := make([]*zmq.Socket, numReplicas)
 
 	for index, replica := range replicas {
 		if index < numReplicas { // Skip the last replica because it's an empty string.
-			// txnUpdateAddress := fmt.Sprintf(PushTemplate, replica, TxnPushPort)
-			// socket := createSocket(zmq.PUSH, context, txnUpdateAddress, false)
-			// txnUpdateSockets[index] = socket
+			txnUpdateAddress := fmt.Sprintf(PushTemplate, replica, TxnPort)
+			socket := createSocket(zmq.PUSH, context, txnUpdateAddress, false)
+			txnUpdateSockets[index] = socket
 
 			pendingDeleteAddress := fmt.Sprintf(PushTemplate, replica, PendingTxnDeletePushPort)
-			socket := createSocket(zmq.PUSH, context, pendingDeleteAddress, false)
+			socket = createSocket(zmq.PUSH, context, pendingDeleteAddress, false)
 			pendingDeleteSockets[index] = socket
 
 			deleteAddress := fmt.Sprintf(PushTemplate, replica, TxnDeletePushPort)
@@ -119,20 +119,19 @@ func main() {
 
 	allTransactions := map[string]*pb.TransactionRecord{}
 	keyVersionIndex := map[string]*[]string{}
-	// pendingDeleteTransactions := map[string]int{} // TODO: Should this track individual replicas?
+	pendingDeleteTransactions := map[string]int{} // TODO: Should this track individual replicas?
 
 	allTransactionsLock := &sync.RWMutex{}
 	keyVersionIndexLock := &sync.RWMutex{}
-	// pendingDeleteTransactionsLock := &sync.RWMutex{}
+	pendingDeleteTransactionsLock := &sync.RWMutex{}
 
-	// go gcRoutine(&allTransactions, allTransactionsLock, &keyVersionIndex,
-	// 	keyVersionIndexLock, &pendingDeleteTransactions, pendingDeleteTransactionsLock,
-	// 	&pendingDeleteSockets, &consistencyManager,
-	// )
+	go gcRoutine(&allTransactions, allTransactionsLock, &keyVersionIndex,
+		keyVersionIndexLock, &pendingDeleteTransactions, pendingDeleteTransactionsLock,
+		&pendingDeleteSockets, &consistencyManager,
+	)
 
-	newTransactions := []*pb.TransactionRecord{}
-
-	// reportStart := time.Now()
+	reportStart := time.Now()
+	txnDeleteCount := 0
 	for true {
 		// Wait a 100ms for a new message; we know by default that there is only
 		// one socket to poll, so we don't have to check which socket we've
@@ -156,7 +155,6 @@ func main() {
 						allTransactionsLock.Lock()
 						allTransactions[record.Id] = record
 						allTransactionsLock.Unlock()
-						newTransactions = append(newTransactions, record)
 
 						for _, key := range record.WriteSet {
 							keyVersionIndexLock.RLock()
@@ -176,67 +174,50 @@ func main() {
 				}
 			case pendingDeletePuller:
 				{
-					// bts, _ := pendingDeletePuller.RecvBytes(zmq.DONTWAIT)
+					bts, _ := pendingDeletePuller.RecvBytes(zmq.DONTWAIT)
 
-					// txnIdList := &pb.TransactionIdList{}
-					// err = proto.Unmarshal(bts, txnIdList)
-					// if err != nil {
-					// 	fmt.Println("Unable to parse received TransactionIdList:\n", err)
-					// 	continue
-					// }
+					txnIdList := &pb.TransactionIdList{}
+					err = proto.Unmarshal(bts, txnIdList)
+					if err != nil {
+						fmt.Println("Unable to parse received TransactionIdList:\n", err)
+						continue
+					}
 
-					// for _, id := range txnIdList.Ids {
-					// 	// We don't need to check if it's in the map because it is
-					// 	// guaranteed to be by the GC process.
-					// 	pendingDeleteTransactionsLock.Lock()
-					// 	pendingDeleteTransactions[id] += 1
-					// 	val := pendingDeleteTransactions[id]
-					// 	pendingDeleteTransactionsLock.Unlock()
+					for _, id := range txnIdList.Ids {
+						// We don't need to check if it's in the map because it is
+						// guaranteed to be by the GC process.
+						pendingDeleteTransactionsLock.Lock()
+						pendingDeleteTransactions[id] += 1
+						val := pendingDeleteTransactions[id]
+						pendingDeleteTransactionsLock.Unlock()
 
-					// 	if val == numReplicas {
-					// 		deleteTransaction(
-					// 			id, &storageManager, &consistencyManager, &allTransactions,
-					// 			allTransactionsLock, &keyVersionIndex, keyVersionIndexLock,
-					// 		)
+						if val == numReplicas {
+							deleteTransaction(
+								id, &storageManager, &consistencyManager, &allTransactions,
+								allTransactionsLock, &keyVersionIndex, keyVersionIndexLock,
+							)
+							txnDeleteCount += 1
 
-					// 		deletedList := &pb.TransactionIdList{Ids: []string{id}}
-					// 		bts, _ := proto.Marshal(deletedList)
+							deletedList := &pb.TransactionIdList{Ids: []string{id}}
+							bts, _ := proto.Marshal(deletedList)
 
-					// 		for _, sckt := range deleteSockets {
-					// 			sckt.SendBytes(bts, zmq.DONTWAIT)
-					// 		}
-					// 	}
-					// }
+							for _, sckt := range deleteSockets {
+								sckt.SendBytes(bts, zmq.DONTWAIT)
+							}
+						}
+					}
 				}
 			}
 		}
 
-		// reportEnd := time.Now()
+		reportEnd := time.Now()
 
-		// Broadcast out all new transactions every second. If any transaction has
-		// been dominated, drop it from the list.
-		// if reportEnd.Sub(reportStart).Seconds() > 1.0 {
+		if reportEnd.Sub(reportStart).Seconds() > 1.0 {
+			fmt.Printf("Deleted %d transactions in the last second.\n", txnDeleteCount)
+			txnDeleteCount = 0
 
-		// 	if len(newTransactions) > 0 {
-		// 		list := &pb.TransactionList{}
-		// 		list.Records = append(list.Records, newTransactions...)
-
-		// 		newTransactions = []*pb.TransactionRecord{}
-
-		// 		// Send the new transactions to all the replicas.
-		// 		message, err := proto.Marshal(list)
-		// 		if err != nil {
-		// 			fmt.Println("Unexpected error while marshaling TransactionList protobuf:\n", err)
-		// 			continue
-		// 		}
-
-		// 		for _, socket := range txnUpdateSockets {
-		// 			socket.SendBytes(message, zmq.DONTWAIT)
-		// 		}
-		// 	}
-
-		// 	reportStart = time.Now()
-		// }
+			reportStart = time.Now()
+		}
 	}
 }
 
