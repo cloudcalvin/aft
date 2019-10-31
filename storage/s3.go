@@ -31,7 +31,7 @@ func (s3 *S3StorageManager) StartTransaction(id string) error {
 }
 
 func (s3 *S3StorageManager) CommitTransaction(transaction *pb.TransactionRecord) error {
-	key := fmt.Sprintf(transactionKey, transaction.Id, transaction.Timestamp)
+	key := fmt.Sprintf(TransactionKey, transaction.Id, transaction.Timestamp)
 	serialized, err := proto.Marshal(transaction)
 	if err != nil {
 		return err

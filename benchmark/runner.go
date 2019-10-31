@@ -27,6 +27,7 @@ var numRequests = flag.Int("numRequests", 1000, "The total number of requests in
 var numThreads = flag.Int("numThreads", 10, "The total number of parallel threads in the benchmark")
 var numKeys = flag.Int64("numKeys", 1000, "The number of keys to operate over")
 var replicaList = flag.String("replicaList", "", "A comma separated list of addresses of Aft replicas")
+var address = flag.String("address", "", "The Aft ELB address to communicate with")
 var benchmarkType = flag.String("benchmarkType", "", "The type of benchmark to run. Options are aft, plain, and local.")
 
 func main() {
@@ -63,7 +64,7 @@ func main() {
 	for tid := 0; tid < *numThreads; tid++ {
 		switch *benchmarkType {
 		case "aft":
-			go benchmark(tid, requestsPerThread, replicas, latencyChannel, errorChannel, totalTimeChannel)
+			go benchmark(tid, requestsPerThread, *address, latencyChannel, errorChannel, totalTimeChannel)
 		case "plain":
 			go benchmarkPlain(tid, requestsPerThread, latencyChannel, errorChannel, totalTimeChannel)
 		case "local":
@@ -110,7 +111,7 @@ func main() {
 func benchmark(
 	tid int,
 	threadRequestCount int64,
-	replicas []string,
+	address string,
 	latencyChannel chan []float64,
 	errorChannel chan []string,
 	totalTimeChannel chan float64,
@@ -124,13 +125,13 @@ func benchmark(
 	)
 
 	type lambdaInput struct {
-		Count    int      `json:"count"`
-		Replicas []string `json:"replicas"`
+		Count   int    `json:"count"`
+		Address string `json:"address"`
 	}
 
 	pyld := lambdaInput{
-		Count:    1,
-		Replicas: replicas,
+		Count:   1,
+		Address: address,
 	}
 	payload, _ := json.Marshal(&pyld)
 

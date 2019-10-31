@@ -47,6 +47,9 @@ message TransactionTag {
 
   // The current status of the transaction (see TransactionStatus).
   TransactionStatus status = 2;
+
+  // The IP address of the replica that received the request.
+  string address = 3;
 }
 
 // A message representing an individual transaction.

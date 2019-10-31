@@ -33,7 +33,7 @@ func (redis *RedisStorageManager) StartTransaction(id string) error {
 }
 
 func (redis *RedisStorageManager) CommitTransaction(transaction *pb.TransactionRecord) error {
-	key := fmt.Sprintf(transactionKey, transaction.Id, transaction.Timestamp)
+	key := fmt.Sprintf(TransactionKey, transaction.Id, transaction.Timestamp)
 	serialized, err := proto.Marshal(transaction)
 	if err != nil {
 		return err

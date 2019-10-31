@@ -16,6 +16,7 @@ import (
 
 type AftServer struct {
 	Id                             string
+	IpAddress                      string
 	StorageManager                 storage.StorageManager
 	ConsistencyManager             consistency.ConsistencyManager
 	RunningTransactions            map[string]*pb.TransactionRecord
@@ -72,6 +73,7 @@ func NewAftServer() (*AftServer, *config.AftConfig) {
 
 	server := &AftServer{
 		Id:                             uid.String(),
+		IpAddress:                      conf.IpAddress,
 		ConsistencyManager:             consistencyManager,
 		StorageManager:                 storageManager,
 		RunningTransactions:            map[string]*pb.TransactionRecord{},

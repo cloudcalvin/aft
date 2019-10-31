@@ -124,7 +124,6 @@ func MulticastRoutine(server *AftServer, ipAddress string, replicaList []string,
 				}
 			case pendingDeletePuller:
 				{
-					fmt.Println("Received a pending delete")
 					bts, _ := pendingDeletePuller.RecvBytes(zmq.DONTWAIT)
 
 					pendingDeleteIds := &pb.TransactionIdList{}
@@ -133,7 +132,6 @@ func MulticastRoutine(server *AftServer, ipAddress string, replicaList []string,
 						fmt.Println("Unexpected error while deserializing Protobufs:\n", err)
 						continue
 					}
-					fmt.Printf("Received %d transaction IDs for pending deletes.\n", len(pendingDeleteIds.Ids))
 
 					validDeleteIds := &pb.TransactionIdList{}
 					for _, id := range pendingDeleteIds.Ids {
@@ -162,8 +160,10 @@ func MulticastRoutine(server *AftServer, ipAddress string, replicaList []string,
 						}
 					}
 
-					bts, _ = proto.Marshal(validDeleteIds)
-					pendingDeletePusher.SendBytes(bts, zmq.DONTWAIT)
+					if len(validDeleteIds.Ids) > 0 {
+						bts, _ = proto.Marshal(validDeleteIds)
+						pendingDeletePusher.SendBytes(bts, zmq.DONTWAIT)
+					}
 				}
 			case deletePuller:
 				{
@@ -175,13 +175,16 @@ func MulticastRoutine(server *AftServer, ipAddress string, replicaList []string,
 						fmt.Println("Unexpected error while deserializing Protobufs:\n", err)
 						continue
 					}
-					// fmt.Printf("Received %d transaction IDs for successful deletes.\n", len(deleteIds.Ids))
 
 					// Delete the successfully deleted IDs from our local seen
 					// transactions metadata.
 					for _, id := range deleteIds.Ids {
 						delete(seenTransactions, id)
 						delete(deletedMarkedTransactions, id)
+
+						server.FinishedTransactionLock.Lock()
+						delete(server.FinishedTransactions, id)
+						server.FinishedTransactionLock.Unlock()
 
 						server.LocallyDeletedTransactionsLock.Lock()
 						delete(server.LocallyDeletedTransactions, id)
@@ -306,10 +309,6 @@ func transactionClearRoutine(dominatedTransactions map[string]*pb.TransactionRec
 		server.LocallyDeletedTransactionsLock.Lock()
 		server.LocallyDeletedTransactions[tid] = true
 		server.LocallyDeletedTransactionsLock.Unlock()
-
-		server.FinishedTransactionLock.Lock()
-		delete(server.FinishedTransactions, tid)
-		server.FinishedTransactionLock.Unlock()
 
 		server.TransactionDependenciesLock.Lock()
 		delete(server.TransactionDependencies, tid)

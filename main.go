@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"time"
@@ -44,7 +45,11 @@ func (s *AftServer) StartTransaction(ctx context.Context, _ *empty.Empty) (*pb.T
 	s.RunningTransactions[tid] = txn
 	s.RunningTransactionLock.Unlock()
 
-	return &pb.TransactionTag{Id: tid, Status: pb.TransactionStatus_RUNNING}, nil
+	return &pb.TransactionTag{
+		Id:      tid,
+		Address: s.IpAddress,
+		Status:  pb.TransactionStatus_RUNNING,
+	}, nil
 }
 
 func (s *AftServer) Write(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyRequest, error) {
@@ -185,6 +190,7 @@ func (s *AftServer) CommitTransaction(ctx context.Context, tag *pb.TransactionTa
 		if err != nil {
 			// TODO: Rollback the transaction.
 			txn.Status = pb.TransactionStatus_ABORTED
+			fmt.Println(err)
 		} else {
 			txn.Status = pb.TransactionStatus_COMMITTED
 		}

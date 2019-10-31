@@ -14,7 +14,6 @@ import (
 	"github.com/vsreekanti/aft/config"
 	"github.com/vsreekanti/aft/consistency"
 	pb "github.com/vsreekanti/aft/proto/aft"
-	"github.com/vsreekanti/aft/storage"
 )
 
 const (
@@ -30,6 +29,8 @@ const (
 
 	// Port to be notified of successful transaction deletes.
 	TxnDeletePushPort = 7781
+
+	GcPort = 7782
 )
 
 func createSocket(tp zmq.Type, context *zmq.Context, address string, bind bool) *zmq.Socket {
@@ -54,6 +55,7 @@ func createSocket(tp zmq.Type, context *zmq.Context, address string, bind bool) 
 }
 
 var replicaList = flag.String("replicaList", "", "A comma separated list of addresses of Aft replicas")
+var gcReplicaList = flag.String("gcReplicaList", "", "A comma separated list of addresses of GC replicas")
 
 func main() {
 	flag.Parse()
@@ -71,16 +73,6 @@ func main() {
 	case "read-atomic":
 		consistencyManager = &consistency.ReadAtomicConsistencyManager{}
 	}
-
-	// var storageManager storage.StorageManager
-	// switch conf.StorageType {
-	// case "s3":
-	// 	storageManager = storage.NewS3StorageManager("vsreekanti")
-	// case "dynamo":
-	// 	storageManager = storage.NewDynamoStorageManager("AftData", "AftData")
-	// case "redis":
-	// 	storageManager = storage.NewRedisStorageManager("aft-test.kxmfgs.clustercfg.use1.cache.amazonaws.com:6379", "")
-	// }
 
 	context, err := zmq.NewContext()
 	if err != nil {
@@ -110,6 +102,17 @@ func main() {
 		}
 	}
 
+	gcReplicas := strings.Split(*gcReplicaList, ",")
+	numGcReplicas := len(gcReplicas) - 1
+	gcSockets := make([]*zmq.Socket, numGcReplicas)
+	for index, gcReplica := range gcReplicas {
+		if index < len(gcReplicas)-1 { // Skip the last replica because it's an empty string.
+			gcAddress := fmt.Sprintf(PushTemplate, gcReplica, GcPort)
+			socket := createSocket(zmq.PUSH, context, gcAddress, false)
+			gcSockets[index] = socket
+		}
+	}
+
 	txnUpdatePuller := createSocket(zmq.PULL, context, fmt.Sprintf(PullTemplate, TxnPort), true)
 	pendingDeletePuller := createSocket(zmq.PULL, context, fmt.Sprintf(PullTemplate, PendingTxnDeletePullPort), true)
 
@@ -118,20 +121,22 @@ func main() {
 	poller.Add(pendingDeletePuller, zmq.POLLIN)
 
 	allTransactions := map[string]*pb.TransactionRecord{}
-	keyVersionIndex := map[string]*[]string{}
+	latestVersionIndex := map[string]string{}
 	pendingDeleteTransactions := map[string]int{} // TODO: Should this track individual replicas?
 
 	allTransactionsLock := &sync.RWMutex{}
-	keyVersionIndexLock := &sync.RWMutex{}
+	latestVersionLock := &sync.RWMutex{}
 	pendingDeleteTransactionsLock := &sync.RWMutex{}
 
-	go gcRoutine(&allTransactions, allTransactionsLock, &keyVersionIndex,
-		keyVersionIndexLock, &pendingDeleteTransactions, pendingDeleteTransactionsLock,
+	go gcRoutine(&allTransactions, allTransactionsLock, &latestVersionIndex,
+		latestVersionLock, &pendingDeleteTransactions, pendingDeleteTransactionsLock,
 		&pendingDeleteSockets, &consistencyManager,
 	)
 
 	reportStart := time.Now()
-	txnDeleteCount := 0
+	currentGcReplica := 0
+	deletedTxns := &pb.TransactionList{}
+
 	for true {
 		// Wait a 100ms for a new message; we know by default that there is only
 		// one socket to poll, so we don't have to check which socket we've
@@ -157,55 +162,51 @@ func main() {
 						allTransactionsLock.Unlock()
 
 						for _, key := range record.WriteSet {
-							keyVersionIndexLock.RLock()
-							index, ok := keyVersionIndex[key]
-							keyVersionIndexLock.RUnlock()
+							storageKey := consistencyManager.GetStorageKeyName(key, record.Timestamp, record.Id)
 
-							if !ok {
-								index = &[]string{}
+							latestVersionLock.Lock()
+							latest, ok := latestVersionIndex[key]
+							if !ok || consistencyManager.CompareKeys(storageKey, latest) {
+								latestVersionIndex[key] = storageKey
 							}
-
-							result := append(*index, consistencyManager.GetStorageKeyName(key, record.Timestamp, record.Id))
-							keyVersionIndexLock.Lock()
-							keyVersionIndex[key] = &result
-							keyVersionIndexLock.Unlock()
+							latestVersionLock.Unlock()
 						}
 					}
 				}
 			case pendingDeletePuller:
 				{
-					// bts, _ := pendingDeletePuller.RecvBytes(zmq.DONTWAIT)
+					bts, _ := pendingDeletePuller.RecvBytes(zmq.DONTWAIT)
 
-					// txnIdList := &pb.TransactionIdList{}
-					// err = proto.Unmarshal(bts, txnIdList)
-					// if err != nil {
-					// 	fmt.Println("Unable to parse received TransactionIdList:\n", err)
-					// 	continue
-					// }
+					txnIdList := &pb.TransactionIdList{}
+					err = proto.Unmarshal(bts, txnIdList)
+					if err != nil {
+						fmt.Println("Unable to parse received TransactionIdList:\n", err)
+						continue
+					}
 
-					// for _, id := range txnIdList.Ids {
-					// 	// We don't need to check if it's in the map because it is
-					// 	// guaranteed to be by the GC process.
-					// 	pendingDeleteTransactionsLock.Lock()
-					// 	pendingDeleteTransactions[id] += 1
-					// 	val := pendingDeleteTransactions[id]
-					// 	pendingDeleteTransactionsLock.Unlock()
+					deletedList := &pb.TransactionIdList{}
 
-					// 	if val == numReplicas {
-					// 		go deleteTransaction(
-					// 			id, &storageManager, &consistencyManager, &allTransactions,
-					// 			allTransactionsLock, &keyVersionIndex, keyVersionIndexLock,
-					// 		)
-					// 		txnDeleteCount += 1
+					for _, id := range txnIdList.Ids {
+						// We don't need to check if it's in the map because it is
+						// guaranteed to be by the GC process.
+						pendingDeleteTransactionsLock.Lock()
+						pendingDeleteTransactions[id] += 1
+						val := pendingDeleteTransactions[id]
+						pendingDeleteTransactionsLock.Unlock()
 
-					// 		deletedList := &pb.TransactionIdList{Ids: []string{id}}
-					// 		bts, _ := proto.Marshal(deletedList)
+						if val == numReplicas {
+							// Clear the local metadata.
+							txn := deleteTransaction(id, &consistencyManager, &allTransactions, allTransactionsLock)
 
-					// 		for _, sckt := range deleteSockets {
-					// 			sckt.SendBytes(bts, zmq.DONTWAIT)
-					// 		}
-					// 	}
-					// }
+							deletedList.Ids = append(deletedList.Ids, id)
+							deletedTxns.Records = append(deletedTxns.Records, txn)
+						}
+					}
+
+					bts, _ = proto.Marshal(deletedList)
+					for _, sckt := range deleteSockets {
+						sckt.SendBytes(bts, zmq.DONTWAIT)
+					}
 				}
 			}
 		}
@@ -213,8 +214,32 @@ func main() {
 		reportEnd := time.Now()
 
 		if reportEnd.Sub(reportStart).Seconds() > 1.0 {
-			fmt.Printf("%s: Deleted %d transactions in the last second.\n", time.Now().String(), txnDeleteCount)
-			txnDeleteCount = 0
+			if len(deletedTxns.Records) > 0 {
+
+				dispatched := 0
+				for len(deletedTxns.Records) > 200 {
+
+					// Send 200 transcations per GC replica.
+					msg := &pb.TransactionList{Records: deletedTxns.Records[0:200]}
+					bts, _ := proto.Marshal(msg)
+
+					socket := gcSockets[currentGcReplica]
+					socket.SendBytes(bts, zmq.DONTWAIT)
+
+					deletedTxns.Records = deletedTxns.Records[200:]
+					currentGcReplica = (currentGcReplica + 1) % numGcReplicas
+					dispatched += 200
+				}
+
+				// Send the remaining transactions.
+				socket := gcSockets[currentGcReplica]
+				bts, _ := proto.Marshal(deletedTxns)
+				socket.SendBytes(bts, zmq.DONTWAIT)
+				dispatched += len(deletedTxns.Records)
+
+				currentGcReplica = (currentGcReplica + 1) % numGcReplicas
+				deletedTxns = &pb.TransactionList{}
+			}
 
 			reportStart = time.Now()
 		}
@@ -223,51 +248,31 @@ func main() {
 
 func deleteTransaction(
 	tid string,
-	storage *storage.StorageManager,
 	cm *consistency.ConsistencyManager,
 	allTransactions *map[string]*pb.TransactionRecord,
 	allTransactionsLock *sync.RWMutex,
-	keyVersionIndex *map[string]*[]string,
-	keyVersionIndexLock *sync.RWMutex,
-) {
+) *pb.TransactionRecord {
 	// Clear the local metadata.
 	allTransactionsLock.Lock()
 	txn := (*allTransactions)[tid]
 	delete(*allTransactions, tid)
 	allTransactionsLock.Unlock()
 
-	for _, key := range txn.WriteSet {
-		storageKey := (*cm).GetStorageKeyName(key, txn.Timestamp, txn.Id)
-		keyVersionIndexLock.Lock()
-		keyIndex := 0
-		index := (*keyVersionIndex)[key]
-		for idx, version := range *index {
-			if version == storageKey {
-				keyIndex = idx
-				break
-			}
-		}
-
-		(*index)[keyIndex] = (*index)[len(*index)-1]
-		(*index) = (*index)[:len(*index)-1]
-		keyVersionIndexLock.Unlock()
-
-		(*storage).Delete(storageKey)
-	}
+	return txn
 }
 
 func gcRoutine(
 	allTransactions *map[string]*pb.TransactionRecord,
 	allTransactionsLock *sync.RWMutex,
-	keyVersionIndex *map[string]*[]string,
-	keyVersionIndexLock *sync.RWMutex,
+	latestVersionIndex *map[string]string,
+	latestVersionLock *sync.RWMutex,
 	pendingDeleteTransactions *map[string]int,
 	pendingDeleteTransactionsLock *sync.RWMutex,
 	pendingDeleteSockets *[]*zmq.Socket,
 	cm *consistency.ConsistencyManager,
 ) {
 	for true {
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(1 * time.Millisecond)
 
 		allTransactionsLock.RLock()
 		keys := make([]string, len(*allTransactions))
@@ -287,7 +292,7 @@ func gcRoutine(
 
 			// We check if txn is nil because we want to make sure that we haven't
 			// already deleted this after making it pending.
-			if txn != nil && isTransactionDominated(txn, cm, keyVersionIndex, keyVersionIndexLock) {
+			if txn != nil && isTransactionDominated(txn, cm, latestVersionIndex, latestVersionLock) {
 				dominatedTransactions.Ids = append(dominatedTransactions.Ids, tid)
 			}
 		}
@@ -304,6 +309,8 @@ func gcRoutine(
 				pendingDeleteTransactionsLock.Unlock()
 			}
 
+			allTransactionsLock.RLock()
+			allTransactionsLock.RUnlock()
 			bts, _ := proto.Marshal(dominatedTransactions)
 			for _, sckt := range *pendingDeleteSockets {
 				sckt.SendBytes(bts, zmq.DONTWAIT)
@@ -317,11 +324,11 @@ func gcRoutine(
 func isTransactionDominated(
 	transaction *pb.TransactionRecord,
 	cm *consistency.ConsistencyManager,
-	keyVersionIndex *map[string]*[]string,
-	keyVersionIndexLock *sync.RWMutex,
+	latestVersionIndex *map[string]string,
+	latestVersionLock *sync.RWMutex,
 ) bool {
 	for _, key := range transaction.WriteSet {
-		if !isKeyVersionDominated(key, transaction, cm, keyVersionIndex, keyVersionIndexLock) {
+		if !isKeyVersionDominated(key, transaction, cm, latestVersionIndex, latestVersionLock) {
 			return false // If any key version is not dominated, return false.
 		}
 	}
@@ -334,22 +341,16 @@ func isKeyVersionDominated(
 	key string,
 	transaction *pb.TransactionRecord,
 	cm *consistency.ConsistencyManager,
-	keyVersionIndex *map[string]*[]string,
-	keyVersionIndexLock *sync.RWMutex,
+	latestVersionIndex *map[string]string,
+	latestVersionLock *sync.RWMutex,
 ) bool {
 	// We know the key has to be in the index because we always add it when we
 	// hear about a new key.
 	storageKey := (*cm).GetStorageKeyName(key, transaction.Timestamp, transaction.Id)
 
-	keyVersionIndexLock.RLock()
-	index := (*keyVersionIndex)[key]
-	keyVersionIndexLock.RUnlock()
+	latestVersionLock.RLock()
+	latest, _ := (*latestVersionIndex)[key]
+	latestVersionLock.RUnlock()
 
-	for _, other := range *index {
-		if (*cm).CompareKeys(other, storageKey) {
-			return true
-		}
-	}
-
-	return false
+	return (*cm).CompareKeys(latest, storageKey)
 }

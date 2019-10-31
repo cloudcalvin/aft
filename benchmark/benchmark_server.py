@@ -24,7 +24,8 @@ def main():
             './benchmark',
             '-numThreads',  str(num_threads),
             '-numRequests', str(num_requests),
-            '-replicaList', replicas
+            '-replicaList', '1.1.1.1',
+            '-address', replicas
         ]
 
         if len(splits) > 3:
