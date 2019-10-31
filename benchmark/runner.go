@@ -141,10 +141,24 @@ func benchmark(
 	}
 
 	benchStart := time.Now()
+	epochStart := time.Now()
+	epochId := 0
+	epochRequests := 0
+	epochLength := 5.0
+
 	requestId := int64(0)
 	for ; requestId < threadRequestCount; requestId++ {
-		if requestId%10 == 0 {
-			log.Println(fmt.Sprintf("Running request %d...", requestId))
+		// if requestId%10 == 0 {
+		// 	log.Println(fmt.Sprintf("Running request %d...", requestId))
+		// }
+
+		epochEnd := time.Now()
+		if epochEnd.Sub(epochStart).Seconds() > epochLength {
+			log.Println(fmt.Sprintf("%s: Epoch %d: %f", time.Now().String(), epochId, float64(epochRequests)/epochLength))
+
+			epochId += 1
+			epochRequests = 0
+			epochStart = time.Now()
 		}
 
 		requestStart := time.Now()
@@ -164,6 +178,8 @@ func benchmark(
 
 			if !strings.Contains(bts, "Success") {
 				errors = append(errors, bts)
+			} else {
+				epochRequests += 1
 			}
 		}
 	}

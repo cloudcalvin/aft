@@ -72,15 +72,15 @@ func main() {
 		consistencyManager = &consistency.ReadAtomicConsistencyManager{}
 	}
 
-	var storageManager storage.StorageManager
-	switch conf.StorageType {
-	case "s3":
-		storageManager = storage.NewS3StorageManager("vsreekanti")
-	case "dynamo":
-		storageManager = storage.NewDynamoStorageManager("AftData", "AftData")
-	case "redis":
-		storageManager = storage.NewRedisStorageManager("aft-test.kxmfgs.clustercfg.use1.cache.amazonaws.com:6379", "")
-	}
+	// var storageManager storage.StorageManager
+	// switch conf.StorageType {
+	// case "s3":
+	// 	storageManager = storage.NewS3StorageManager("vsreekanti")
+	// case "dynamo":
+	// 	storageManager = storage.NewDynamoStorageManager("AftData", "AftData")
+	// case "redis":
+	// 	storageManager = storage.NewRedisStorageManager("aft-test.kxmfgs.clustercfg.use1.cache.amazonaws.com:6379", "")
+	// }
 
 	context, err := zmq.NewContext()
 	if err != nil {
@@ -174,38 +174,38 @@ func main() {
 				}
 			case pendingDeletePuller:
 				{
-					bts, _ := pendingDeletePuller.RecvBytes(zmq.DONTWAIT)
+					// bts, _ := pendingDeletePuller.RecvBytes(zmq.DONTWAIT)
 
-					txnIdList := &pb.TransactionIdList{}
-					err = proto.Unmarshal(bts, txnIdList)
-					if err != nil {
-						fmt.Println("Unable to parse received TransactionIdList:\n", err)
-						continue
-					}
+					// txnIdList := &pb.TransactionIdList{}
+					// err = proto.Unmarshal(bts, txnIdList)
+					// if err != nil {
+					// 	fmt.Println("Unable to parse received TransactionIdList:\n", err)
+					// 	continue
+					// }
 
-					for _, id := range txnIdList.Ids {
-						// We don't need to check if it's in the map because it is
-						// guaranteed to be by the GC process.
-						pendingDeleteTransactionsLock.Lock()
-						pendingDeleteTransactions[id] += 1
-						val := pendingDeleteTransactions[id]
-						pendingDeleteTransactionsLock.Unlock()
+					// for _, id := range txnIdList.Ids {
+					// 	// We don't need to check if it's in the map because it is
+					// 	// guaranteed to be by the GC process.
+					// 	pendingDeleteTransactionsLock.Lock()
+					// 	pendingDeleteTransactions[id] += 1
+					// 	val := pendingDeleteTransactions[id]
+					// 	pendingDeleteTransactionsLock.Unlock()
 
-						if val == numReplicas {
-							deleteTransaction(
-								id, &storageManager, &consistencyManager, &allTransactions,
-								allTransactionsLock, &keyVersionIndex, keyVersionIndexLock,
-							)
-							txnDeleteCount += 1
+					// 	if val == numReplicas {
+					// 		go deleteTransaction(
+					// 			id, &storageManager, &consistencyManager, &allTransactions,
+					// 			allTransactionsLock, &keyVersionIndex, keyVersionIndexLock,
+					// 		)
+					// 		txnDeleteCount += 1
 
-							deletedList := &pb.TransactionIdList{Ids: []string{id}}
-							bts, _ := proto.Marshal(deletedList)
+					// 		deletedList := &pb.TransactionIdList{Ids: []string{id}}
+					// 		bts, _ := proto.Marshal(deletedList)
 
-							for _, sckt := range deleteSockets {
-								sckt.SendBytes(bts, zmq.DONTWAIT)
-							}
-						}
-					}
+					// 		for _, sckt := range deleteSockets {
+					// 			sckt.SendBytes(bts, zmq.DONTWAIT)
+					// 		}
+					// 	}
+					// }
 				}
 			}
 		}
@@ -213,7 +213,7 @@ func main() {
 		reportEnd := time.Now()
 
 		if reportEnd.Sub(reportStart).Seconds() > 1.0 {
-			fmt.Printf("Deleted %d transactions in the last second.\n", txnDeleteCount)
+			fmt.Printf("%s: Deleted %d transactions in the last second.\n", time.Now().String(), txnDeleteCount)
 			txnDeleteCount = 0
 
 			reportStart = time.Now()

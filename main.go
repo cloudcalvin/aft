@@ -106,11 +106,9 @@ func (s *AftServer) Read(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyR
 			}
 
 			// If we've read the key version before, return that version.
-			//s.ReadCacheLock.RLock()
-			//val, ok := s.ReadCache[key]
-			//s.ReadCacheLock.RUnlock()
-			val := &pb.KeyValuePair{}
-			ok := false
+			s.ReadCacheLock.RLock()
+			val, ok := s.ReadCache[key]
+			s.ReadCacheLock.RUnlock()
 
 			if ok {
 				returnValue = val.Value
