@@ -171,6 +171,11 @@ func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
 		// already written.
 		for read := range transaction.ReadSet {
 			readVersion := racm.GetStorageKeyName(read, transaction.Timestamp, transaction.Id)
+			if len(keyVersion.version) == 0 { // This key was already deleted.
+				validVersion = false
+				break
+			}
+
 			if !racm.CompareKeys(readVersion, keyVersion.version) {
 				for _, cowritten := range keyTxn.WriteSet {
 					if cowritten == readVersion {

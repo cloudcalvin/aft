@@ -2,12 +2,16 @@
 
 import logging
 import os
+import tarfile
+from tempfile import TemporaryFile
 import time
 
 import boto3
 import kubernetes as k8s
+from kubernetes.stream import stream
 
 ec2 = boto3.client('ec2')
+ec2r = boto3.resource('ec2')
 
 logging.basicConfig(filename='log_ft.txt', level=logging.INFO,
                     format='%(asctime)s %(message)s')
@@ -36,14 +40,12 @@ def main():
 
             # Move a node over from standby.
             sb_nodes = client.list_node(label_selector='role=standby').items
-            print('Found some nodes to list...')
             if len(sb_nodes) == 0:
                 # wait for more standby nodes to come online
                 logging.info("Looping on standby nodes.")
                 continue
 
             node = sb_nodes[0]
-            print('Found a node!')
             int_ip = None
             for address in node.status.addresses:
                 if address.type == 'InternalIP':
@@ -52,28 +54,28 @@ def main():
             node.metadata.labels['role'] = 'aft'
             client.patch_node(node.metadata.name, node)
 
-            logging.info("Now attempting to change tags...")
             instance_id = ec2.describe_instances(Filters=[{'Name':
                                                            'network-interface.addresses.private-ip-address',
                                                            'Values':
-                                                           ['172.20.51.28']}])['Reservations'][0]['Instances'][0]['InstanceId']
-            instance = ec2.Instance(instance_id)
-            instance.delete_tags(Tags=[{'Key': 'aws:autoscaling:groupName'},
-                                       {'Key': 'Name'}])
+                                                           [int_ip]}])['Reservations'][0]['Instances'][0]['InstanceId']
+            instance = ec2r.Instance(instance_id)
+            instance.delete_tags(Tags=[{'Key': 'Name'},
+                                       {'Key': 'k8s.io/cluster-autoscaler/node-template/label/role'}])
             instance.create_tags(Tags=[
-                {
-                    'Key': 'aws:autoscaling:groupName',
-                    'Value': 'aft-instances.ucbfluent.de'
-                },
                 {
                     'Key': 'Name',
                     'Value': 'aft-instances.ucbfluent.de'
+                },
+                {
+                    'Key':
+                    'k8s.io/cluster-autoscaler/node-template/label/role',
+                    'Value': 'aft'
                 }
             ])
             logging.info("Changed tags...")
 
 
-            time.sleep(2) # wait for the new pod to come online
+            time.sleep(5) # wait for the new pod to come online
             setup_pod(client, int_ip)
         else:
             cr_set = set(current_replicas)
@@ -118,57 +120,29 @@ def setup_pod(client, internal_ip):
                                       label_selector='role=aft').items
 
     pname = None
+    aft_pod = None
     running = False
 
-    logging.info('Waiting for pod to be running...')
     while not running:
         for pod in pods:
             if pod.status.pod_ip == internal_ip:
                 pname = pod.metadata.name
+                aft_pod = pod
                 if pod.status.phase == 'Running':
                     running = True # wait till the pod is running
-    logging.info('Found pod %s!' % pname)
 
-    eopy_file_to_pod(client, '../conf/aft-config.yml', pname,
-                     '/go/src/github.com/vsreekanti/aft/conf', 'aft-container')
-    copy_file_to_pod(client, '../replicas.txt', pname,
-                     '/go/src/github.com/vsreekanti/aft', 'aft-container')
-    logging.info('Copied files to %s...')
+    ips = list_all_aft_ips(client)
+    with open('replicas.txt', 'w') as f:
+        for ip in ips:
+            f.write(ip + '\n')
+    os.system('kubectl cp replicas.txt %s:/go/src/github.com/vsreekanti/aft' % pname)
+    os.system('kubectl cp ../conf/aft-config.yml %s:/go/src/github.com/vsreekanti/aft/conf' % pname)
+    os.system('rm replicas.txt')
 
-# from https://github.com/aogier/k8s-client-python/
-# commmit: 12f1443895e80ee24d689c419b5642de96c58cc8/
-# file: examples/exec.py line 101
-def copy_file_to_pod(client, file_path, pod_name, pod_path, container):
-    exec_command = ['tar', 'xmvf', '-', '-C', pod_path]
-    resp = stream(client.connect_get_namespaced_pod_exec, pod_name, NAMESPACE,
-                  command=exec_command,
-                  stderr=True, stdin=True,
-                  stdout=True, tty=False,
-                  _preload_content=False, container=container)
-
-    filename = file_path.split('/')[-1]
-    with TemporaryFile() as tar_buffer:
-        with tarfile.open(fileobj=tar_buffer, mode='w') as tar:
-            tar.add(file_path, arcname=filename)
-
-        tar_buffer.seek(0)
-        commands = [str(tar_buffer.read(), 'utf-8')]
-
-        while resp.is_open():
-            resp.update(timeout=1)
-            if resp.peek_stdout():
-                pass
-            if resp.peek_stderr():
-                logging.info("Unexpected error while copying files: %s" %
-                      (resp.read_stderr()))
-                sys.exit(1)
-            if commands:
-                c = commands.pop(0)
-                resp.write_stdin(c)
-            else:
-                break
-        resp.close()
-
+    time.sleep(50)
+    aft_pod.metadata.labels['aftReady'] = 'isready'
+    aft_pod = client.patch_namespaced_pod(aft_pod.metadata.name, 'default', aft_pod)
+    logging.info(aft_pod)
 
 if __name__ == '__main__':
     main()

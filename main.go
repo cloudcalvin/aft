@@ -190,7 +190,6 @@ func (s *AftServer) CommitTransaction(ctx context.Context, tag *pb.TransactionTa
 		if err != nil {
 			// TODO: Rollback the transaction.
 			txn.Status = pb.TransactionStatus_ABORTED
-			fmt.Println(err)
 		} else {
 			txn.Status = pb.TransactionStatus_COMMITTED
 		}
@@ -303,12 +302,18 @@ func main() {
 	aft, config := NewAftServer()
 	pb.RegisterAftServer(server, aft)
 
+	seenTransactions := map[string]bool{}
+	for seenTxn := range aft.FinishedTransactions {
+		seenTransactions[seenTxn] = true
+	}
+
 	// Start the multicast goroutine.
-	go MulticastRoutine(aft, config.IpAddress, config.ReplicaList, config.ManagerAddress)
+	go MulticastRoutine(aft, seenTransactions, config.IpAddress, config.ReplicaList, config.ManagerAddress)
 
 	// Start the local GC routine.
 	go LocalGCRoutine(aft)
 
+	fmt.Printf("Starting server at %s.\n", time.Now().String())
 	if err = server.Serve(lis); err != nil {
 		log.Fatal("Could not start server on port %s: %v\n", port, err)
 	}

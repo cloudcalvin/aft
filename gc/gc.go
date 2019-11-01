@@ -217,7 +217,7 @@ func main() {
 			if len(deletedTxns.Records) > 0 {
 
 				dispatched := 0
-				for len(deletedTxns.Records) > 200 {
+				for len(deletedTxns.Records) > 700 {
 
 					// Send 200 transcations per GC replica.
 					msg := &pb.TransactionList{Records: deletedTxns.Records[0:200]}

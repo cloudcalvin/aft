@@ -21,6 +21,9 @@ type StorageManager interface {
 	// Retrieve a transaction record from the storage engine.
 	GetTransaction(transactionKey string) (*pb.TransactionRecord, error)
 
+	// Retrieve a set of transactions from the storage engine.
+	MultiGetTransaction(transactionKeys *[]string) (*[]*pb.TransactionRecord, error)
+
 	// As a part of the transaction owned by tid, insert a key-value pair into
 	// the storage engine.
 	Put(key string, val *pb.KeyValuePair) error
@@ -37,4 +40,7 @@ type StorageManager interface {
 
 	// Deletes the given key from the underlying storage engine.
 	Delete(key string) error
+
+	// Delete multiple keys at once.
+	MultiDelete(*[]string) error
 }

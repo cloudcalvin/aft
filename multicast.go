@@ -47,7 +47,12 @@ func createSocket(tp zmq.Type, context *zmq.Context, address string, bind bool) 
 	return sckt
 }
 
-func MulticastRoutine(server *AftServer, ipAddress string, replicaList []string, managerAddress string) {
+func MulticastRoutine(
+	server *AftServer,
+	seenTransactions map[string]bool,
+	ipAddress string,
+	replicaList []string,
+	managerAddress string) {
 	context, err := zmq.NewContext()
 	if err != nil {
 		fmt.Println("Unexpected error while creating ZeroMQ context. Exiting:\n", err)
@@ -82,9 +87,6 @@ func MulticastRoutine(server *AftServer, ipAddress string, replicaList []string,
 	poller.Add(updatePuller, zmq.POLLIN)
 	poller.Add(pendingDeletePuller, zmq.POLLIN)
 	poller.Add(deletePuller, zmq.POLLIN)
-
-	// A set to track which transactions we've already gossiped.
-	seenTransactions := map[string]bool{}
 
 	// We use this map to make sure we don't say to GC the same transaction more
 	// than once.
@@ -309,6 +311,10 @@ func transactionClearRoutine(dominatedTransactions map[string]*pb.TransactionRec
 		server.LocallyDeletedTransactionsLock.Lock()
 		server.LocallyDeletedTransactions[tid] = true
 		server.LocallyDeletedTransactionsLock.Unlock()
+
+		// server.FinishedTransactionLock.Lock()
+		// delete(server.FinishedTransactions, tid)
+		// server.FinishedTransactionLock.Unlock()
 
 		server.TransactionDependenciesLock.Lock()
 		delete(server.TransactionDependencies, tid)

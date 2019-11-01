@@ -93,6 +93,21 @@ func (s3 *S3StorageManager) GetTransaction(transactionKey string) (*pb.Transacti
 	return result, err
 }
 
+func (s3 *S3StorageManager) MultiGetTransaction(transactionKeys *[]string) (*[]*pb.TransactionRecord, error) {
+	results := make([]*pb.TransactionRecord, len(*transactionKeys))
+
+	for index, key := range *transactionKeys {
+		txn, err := s3.GetTransaction(key)
+		if err != nil {
+			return &[]*pb.TransactionRecord{}, err
+		}
+
+		results[index] = txn
+	}
+
+	return &results, nil
+}
+
 func (s3 *S3StorageManager) Put(key string, val *pb.KeyValuePair) error {
 	serialized, err := proto.Marshal(val)
 	if err != nil {
@@ -129,6 +144,17 @@ func (s3 *S3StorageManager) Delete(key string) error {
 
 	_, err := s3.s3Client.DeleteObject(input)
 	return err
+}
+
+func (s3 *S3StorageManager) MultiDelete(keys *[]string) error {
+	for _, key := range *keys {
+		err := s3.Delete(key)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (s3 *S3StorageManager) List(prefix string) ([]string, error) {

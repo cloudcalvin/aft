@@ -96,29 +96,9 @@ func NewAftServer() (*AftServer, *config.AftConfig) {
 
 	// Retrieve the list of committed transactions
 	transactionKeys, _ := storageManager.List("transactions")
-	for _, txnKey := range transactionKeys {
-		txnRecord, err := storageManager.GetTransaction(txnKey)
-		if err != nil {
-			log.Fatal("Unexpected error while retrieving transaction data:\n%v", err)
-			os.Exit(1)
-		}
-
-		server.FinishedTransactions[txnRecord.Id] = txnRecord
-
-		// Prepopulate the KeyVersionIndex with the list of keys already in the
-		// storage engine.
-		for _, key := range txnRecord.WriteSet {
-			kvName := consistencyManager.GetStorageKeyName(key, txnRecord.Timestamp, txnRecord.Id)
-
-			index, ok := server.KeyVersionIndex[key]
-			if !ok {
-				index = &map[string]bool{}
-				server.KeyVersionIndex[key] = index
-			}
-
-			(*index)[kvName] = false
-		}
-	}
+	transactionRecords, err := storageManager.MultiGetTransaction(&transactionKeys)
+	txnList := &pb.TransactionList{Records: *transactionRecords}
+	server.UpdateMetadata(txnList)
 
 	fmt.Printf("Prepopulation finished: Found %d transactions and %d keys.\n", len(server.FinishedTransactions), len(server.KeyVersionIndex))
 

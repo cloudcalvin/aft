@@ -90,7 +90,7 @@ func main() {
 				continue
 			}
 
-			batchSize := 15
+			batchSize := 25
 			batch := []*pb.TransactionRecord{}
 			for _, transaction := range txnList.Records {
 				batch = append(batch, transaction)
@@ -123,15 +123,19 @@ func deleteTransactions(
 	txnDeleteCount *int,
 	txnDeleteLock *sync.Mutex,
 ) {
+	keys := []string{}
+
 	for _, transaction := range batch {
 		for _, key := range transaction.WriteSet {
 			storageKey := (*cm).GetStorageKeyName(key, transaction.Timestamp, transaction.Id)
-			(*storageMgr).Delete(storageKey)
-
-			txnKey := fmt.Sprintf(storage.TransactionKey, transaction.Id, transaction.Timestamp)
-			(*storageMgr).Delete(txnKey)
+			keys = append(keys, storageKey)
 		}
+
+		txnKey := fmt.Sprintf(storage.TransactionKey, transaction.Id, transaction.Timestamp)
+		keys = append(keys, txnKey)
 	}
+
+	(*storageMgr).MultiDelete(&keys)
 
 	txnDeleteLock.Lock()
 	*txnDeleteCount += len(batch)
