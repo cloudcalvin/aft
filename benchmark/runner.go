@@ -95,9 +95,9 @@ func main() {
 	nninth, _ := stats.Percentile(latencies, 99.0)
 	totalThruput, _ := stats.Sum(thruputs)
 
-	if len(errors) > 0 {
-		fmt.Printf("Errors: %v\n", errors)
-	}
+	// if len(errors) > 0 {
+	// 	fmt.Printf("Errors: %v\n", errors)
+	// }
 
 	fmt.Printf("Number of errors: %d\n", len(errors))
 	fmt.Printf("Median latency: %.6f\n", median)
@@ -149,9 +149,6 @@ func benchmark(
 
 	requestId := int64(0)
 	for ; requestId < threadRequestCount; requestId++ {
-		// if requestId%10 == 0 {
-		// 	log.Println(fmt.Sprintf("Running request %d...", requestId))
-		// }
 
 		epochEnd := time.Now()
 		if epochEnd.Sub(epochStart).Seconds() > epochLength {
