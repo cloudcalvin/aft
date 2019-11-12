@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"time"
@@ -44,7 +45,11 @@ func (s *AftServer) StartTransaction(ctx context.Context, _ *empty.Empty) (*pb.T
 	s.RunningTransactions[tid] = txn
 	s.RunningTransactionLock.Unlock()
 
-	return &pb.TransactionTag{Id: tid, Status: pb.TransactionStatus_RUNNING}, nil
+	return &pb.TransactionTag{
+		Id:      tid,
+		Address: s.IpAddress,
+		Status:  pb.TransactionStatus_RUNNING,
+	}, nil
 }
 
 func (s *AftServer) Write(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyRequest, error) {
@@ -94,7 +99,13 @@ func (s *AftServer) Read(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyR
 		}
 
 		if !found {
-			key, err := s.ConsistencyManager.GetValidKeyVersion(request.Key, txn, &s.ReadCache, s.ReadCacheLock, &s.KeyVersionIndex, s.KeyVersionIndexLock)
+			key, err := s.ConsistencyManager.GetValidKeyVersion(
+				request.Key, txn, &s.FinishedTransactions,
+				s.FinishedTransactionLock, &s.KeyVersionIndex,
+				s.KeyVersionIndexLock, &s.TransactionDependencies,
+				s.TransactionDependenciesLock, &s.LatestVersionIndex,
+				s.LatestVersionIndexLock,
+			)
 			if err != nil {
 				return &pb.KeyRequest{}, err
 			}
@@ -112,11 +123,15 @@ func (s *AftServer) Read(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyR
 				// If the GET request returns an error, that means the key was not
 				// accessible, so we return nil.
 				if err != nil {
-					return &pb.KeyRequest{}, err
+					return resp, err
 				} else { // Otherwise, add this key to our read cache.
 					s.ReadCacheLock.Lock()
 					s.ReadCache[key] = *kvPair
 					s.ReadCacheLock.Unlock()
+
+					s.KeyVersionIndexLock.Lock()
+					(*s.KeyVersionIndex[request.Key])[key] = true
+					s.KeyVersionIndexLock.Unlock()
 
 					returnValue = kvPair.Value
 				}
@@ -139,7 +154,8 @@ func (s *AftServer) CommitTransaction(ctx context.Context, tag *pb.TransactionTa
 	txn := s.RunningTransactions[tid]
 	s.RunningTransactionLock.RUnlock()
 
-	ok := s.ConsistencyManager.ValidateTransaction(tid, txn.ReadSet, txn.WriteSet)
+	// ok := s.ConsistencyManager.ValidateTransaction(tid, txn.ReadSet, txn.WriteSet)
+	ok := true
 
 	if ok {
 		// Construct the set of keys that were written together to put into the KVS
@@ -156,7 +172,7 @@ func (s *AftServer) CommitTransaction(ctx context.Context, tag *pb.TransactionTa
 		s.UpdateBufferLock.RUnlock()
 
 		// Write updates to storage manager.
-		success := true
+		updateData := map[string]*pb.KeyValuePair{}
 		for _, update := range keyUpdates {
 			key := s.ConsistencyManager.GetStorageKeyName(update.key, txn.Timestamp, tid)
 			val := &pb.KeyValuePair{
@@ -167,15 +183,11 @@ func (s *AftServer) CommitTransaction(ctx context.Context, tag *pb.TransactionTa
 				Timestamp:     txn.Timestamp,
 			}
 
-			err := s.StorageManager.Put(key, val)
-
-			if err != nil {
-				success = false
-				break
-			}
+			updateData[key] = val
 		}
 
-		if !success {
+		err := s.StorageManager.MultiPut(&updateData)
+		if err != nil {
 			// TODO: Rollback the transaction.
 			txn.Status = pb.TransactionStatus_ABORTED
 		} else {
@@ -195,15 +207,20 @@ func (s *AftServer) CommitTransaction(ctx context.Context, tag *pb.TransactionTa
 	delete(s.RunningTransactions, tid)
 	s.RunningTransactionLock.Unlock()
 
-	s.FinishedTransactionLock.Lock()
-	s.FinishedTransactions[tid] = txn
-	s.FinishedTransactionLock.Unlock()
-
 	s.UpdateBufferLock.Lock()
 	delete(s.UpdateBuffer, tid)
 	s.UpdateBufferLock.Unlock()
 
-	s.updateKeyVersionIndex(txn)
+	// Update all of the metadata for data this transaction read.
+	for _, storageKey := range txn.ReadSet {
+		inWriteSet := false
+
+		if !inWriteSet {
+			s.ConsistencyManager.UpdateTransactionDependencies(storageKey, true, &s.TransactionDependencies, s.TransactionDependenciesLock)
+		}
+	}
+
+	s.UpdateMetadata(&pb.TransactionList{Records: []*pb.TransactionRecord{txn}})
 	return &pb.TransactionTag{Id: tid, Status: txn.Status}, nil
 }
 
@@ -232,32 +249,43 @@ func (s *AftServer) AbortTransaction(ctx context.Context, tag *pb.TransactionTag
 	return &pb.TransactionTag{Id: tid, Status: pb.TransactionStatus_ABORTED}, nil
 }
 
-func (s *AftServer) UpdateMetadata(ctx context.Context, list *pb.TransactionList) (*empty.Empty, error) {
-	s.FinishedTransactionLock.Lock()
+func (s *AftServer) UpdateMetadata(list *pb.TransactionList) (*empty.Empty, error) {
 	for _, record := range list.Records {
-		s.FinishedTransactions[record.Id] = record
+		s.FinishedTransactionLock.Lock()
 		s.updateKeyVersionIndex(record)
+
+		s.FinishedTransactions[record.Id] = record
+		s.FinishedTransactionLock.Unlock()
 	}
-	s.FinishedTransactionLock.Unlock()
 
 	return &empty.Empty{}, nil
 }
 
 func (s *AftServer) updateKeyVersionIndex(transaction *pb.TransactionRecord) {
-	s.KeyVersionIndexLock.Lock()
 	for _, key := range transaction.WriteSet {
 		kvName := s.ConsistencyManager.GetStorageKeyName(key, transaction.Timestamp, transaction.Id)
 
+		s.KeyVersionIndexLock.RLock()
 		index, ok := s.KeyVersionIndex[key]
-		if !ok {
-			index = &[]string{}
-			s.KeyVersionIndex[key] = index
-		}
+		s.KeyVersionIndexLock.RUnlock()
 
-		result := append(*index, kvName)
-		s.KeyVersionIndex[key] = &result
+		s.KeyVersionIndexLock.Lock()
+		if !ok {
+			index = &map[string]bool{}
+			(*index)[kvName] = false
+			s.KeyVersionIndex[key] = index
+		} else {
+			(*s.KeyVersionIndex[key])[kvName] = false
+		}
+		s.KeyVersionIndexLock.Unlock()
+
+		s.LatestVersionIndexLock.Lock()
+		latest, ok := s.LatestVersionIndex[key]
+		if !ok || s.ConsistencyManager.CompareKeys(kvName, latest) {
+			s.LatestVersionIndex[key] = kvName
+		}
+		s.LatestVersionIndexLock.Unlock()
 	}
-	s.KeyVersionIndexLock.Unlock()
 }
 
 const (
@@ -274,9 +302,18 @@ func main() {
 	aft, config := NewAftServer()
 	pb.RegisterAftServer(server, aft)
 
-	// Start the multicast goroutine.
-	go MulticastRoutine(aft, config.ReplicaList)
+	seenTransactions := map[string]bool{}
+	for seenTxn := range aft.FinishedTransactions {
+		seenTransactions[seenTxn] = true
+	}
 
+	// Start the multicast goroutine.
+	go MulticastRoutine(aft, seenTransactions, config.IpAddress, config.ReplicaList, config.ManagerAddress)
+
+	// Start the local GC routine.
+	go LocalGCRoutine(aft)
+
+	fmt.Printf("Starting server at %s.\n", time.Now().String())
 	if err = server.Serve(lis); err != nil {
 		log.Fatal("Could not start server on port %s: %v\n", port, err)
 	}

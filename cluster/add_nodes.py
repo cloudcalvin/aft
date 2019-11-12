@@ -24,8 +24,8 @@ import util
 ec2_client = boto3.client('ec2', os.getenv('AWS_REGION', 'us-east-1'))
 
 
-def add_nodes(client, apps_client, cfile, kinds, counts, aws_key_id=None,
-              aws_key=None, create=False, prefix=None):
+def add_nodes(client, apps_client, cfile, kinds, counts, management_ip,
+              aws_key_id=None, aws_key=None, create=False, prefix=None):
     for i in range(len(kinds)):
         print('Adding %d %s server node(s) to cluster...' %
               (counts[i], kinds[i]))
@@ -51,6 +51,7 @@ def add_nodes(client, apps_client, cfile, kinds, counts, aws_key_id=None,
             for container in yml['spec']['template']['spec']['containers']:
                 env = container['env']
                 util.replace_yaml_val(env, 'REPLICA_IPS', replica_str)
+                util.replace_yaml_val(env, 'MANAGER', management_ip)
                 util.replace_yaml_val(env, 'AWS_ACCESS_KEY_ID', aws_key_id)
                 util.replace_yaml_val(env, 'AWS_SECRET_ACCESS_KEY', aws_key)
 
@@ -73,6 +74,9 @@ def add_nodes(client, apps_client, cfile, kinds, counts, aws_key_id=None,
                 for container in pod.spec.containers:
                     cname = container.name
                     created_pods.append((pname, cname))
+                    pod.metadata.labels['aftReady'] = 'isready'
+                    client.patch_namespaced_pod(pod.metadata.name,
+                                                util.NAMESPACE, pod)
 
             # Copy the KVS config into all recently created pods.
             os.system('cp %s ./aft-config.yml' % cfile)

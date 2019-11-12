@@ -33,7 +33,7 @@ func (redis *RedisStorageManager) StartTransaction(id string) error {
 }
 
 func (redis *RedisStorageManager) CommitTransaction(transaction *pb.TransactionRecord) error {
-	key := fmt.Sprintf(transactionKey, transaction.Id, transaction.Timestamp)
+	key := fmt.Sprintf(TransactionKey, transaction.Id, transaction.Timestamp)
 	serialized, err := proto.Marshal(transaction)
 	if err != nil {
 		return err
@@ -71,6 +71,21 @@ func (redis *RedisStorageManager) GetTransaction(transactionKey string) (*pb.Tra
 	return result, err
 }
 
+func (redis *RedisStorageManager) MultiGetTransaction(transactionKeys *[]string) (*[]*pb.TransactionRecord, error) {
+	results := make([]*pb.TransactionRecord, len(*transactionKeys))
+
+	for index, key := range *transactionKeys {
+		txn, err := redis.GetTransaction(key)
+		if err != nil {
+			return &[]*pb.TransactionRecord{}, err
+		}
+
+		results[index] = txn
+	}
+
+	return &results, nil
+}
+
 func (redis *RedisStorageManager) Put(key string, val *pb.KeyValuePair) error {
 	serialized, err := proto.Marshal(val)
 	if err != nil {
@@ -80,8 +95,30 @@ func (redis *RedisStorageManager) Put(key string, val *pb.KeyValuePair) error {
 	return redis.client.Set(key, serialized, 0).Err()
 }
 
+func (redis *RedisStorageManager) MultiPut(data *map[string]*pb.KeyValuePair) error {
+	for key, val := range *data {
+		err := redis.Put(key, val)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (redis *RedisStorageManager) Delete(key string) error {
 	return redis.client.Del(key).Err()
+}
+
+func (redis *RedisStorageManager) MultiDelete(keys *[]string) error {
+	for _, key := range *keys {
+		err := redis.Delete(key)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (redis *RedisStorageManager) List(prefix string) ([]string, error) {

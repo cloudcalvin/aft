@@ -45,3 +45,5 @@ spec:
           value: AWS_SECRET_KEY_DUMMY
         - name: ROLE
           value: aft
+        - name: MANAGER
+          value: MANAGER_DUMMY

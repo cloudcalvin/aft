@@ -31,7 +31,7 @@ func (s3 *S3StorageManager) StartTransaction(id string) error {
 }
 
 func (s3 *S3StorageManager) CommitTransaction(transaction *pb.TransactionRecord) error {
-	key := fmt.Sprintf(transactionKey, transaction.Id, transaction.Timestamp)
+	key := fmt.Sprintf(TransactionKey, transaction.Id, transaction.Timestamp)
 	serialized, err := proto.Marshal(transaction)
 	if err != nil {
 		return err
@@ -93,6 +93,21 @@ func (s3 *S3StorageManager) GetTransaction(transactionKey string) (*pb.Transacti
 	return result, err
 }
 
+func (s3 *S3StorageManager) MultiGetTransaction(transactionKeys *[]string) (*[]*pb.TransactionRecord, error) {
+	results := make([]*pb.TransactionRecord, len(*transactionKeys))
+
+	for index, key := range *transactionKeys {
+		txn, err := s3.GetTransaction(key)
+		if err != nil {
+			return &[]*pb.TransactionRecord{}, err
+		}
+
+		results[index] = txn
+	}
+
+	return &results, nil
+}
+
 func (s3 *S3StorageManager) Put(key string, val *pb.KeyValuePair) error {
 	serialized, err := proto.Marshal(val)
 	if err != nil {
@@ -110,6 +125,17 @@ func (s3 *S3StorageManager) Put(key string, val *pb.KeyValuePair) error {
 	return err
 }
 
+func (s3 *S3StorageManager) MultiPut(data *map[string]*pb.KeyValuePair) error {
+	for key, val := range *data {
+		err := s3.Put(key, val)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (s3 *S3StorageManager) Delete(key string) error {
 	input := &awss3.DeleteObjectInput{
 		Bucket: &s3.bucket,
@@ -118,6 +144,17 @@ func (s3 *S3StorageManager) Delete(key string) error {
 
 	_, err := s3.s3Client.DeleteObject(input)
 	return err
+}
+
+func (s3 *S3StorageManager) MultiDelete(keys *[]string) error {
+	for _, key := range *keys {
+		err := s3.Delete(key)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (s3 *S3StorageManager) List(prefix string) ([]string, error) {

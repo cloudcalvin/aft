@@ -35,7 +35,7 @@ func (dynamo *DynamoStorageManager) StartTransaction(id string) error {
 }
 
 func (dynamo *DynamoStorageManager) CommitTransaction(transaction *pb.TransactionRecord) error {
-	key := fmt.Sprintf(transactionKey, transaction.Id, transaction.Timestamp)
+	key := fmt.Sprintf(TransactionKey, transaction.Id, transaction.Timestamp)
 	serialized, err := proto.Marshal(transaction)
 	if err != nil {
 		return err
@@ -90,6 +90,64 @@ func (dynamo *DynamoStorageManager) GetTransaction(transactionKey string) (*pb.T
 	return result, err
 }
 
+func (dynamo *DynamoStorageManager) MultiGetTransaction(transactionKeys *[]string) (*[]*pb.TransactionRecord, error) {
+	results := make([]*pb.TransactionRecord, len(*transactionKeys))
+	resultIndex := 0
+
+	input := map[string]*awsdynamo.KeysAndAttributes{}
+	input[dynamo.dataTable] = &awsdynamo.KeysAndAttributes{}
+	input[dynamo.dataTable].Keys = []map[string]*awsdynamo.AttributeValue{}
+
+	for _, key := range *transactionKeys {
+		keyData := map[string]*awsdynamo.AttributeValue{
+			"DataKey": {
+				S: aws.String(key),
+			},
+		}
+
+		input[dynamo.dataTable].Keys = append(input[dynamo.dataTable].Keys, keyData)
+		if len(input[dynamo.dataTable].Keys) == 100 {
+			response, err := dynamo.dynamoClient.BatchGetItem(&awsdynamo.BatchGetItemInput{RequestItems: input})
+			if err != nil {
+				return &[]*pb.TransactionRecord{}, err
+			}
+
+			for _, serialized := range response.Responses[dynamo.dataTable] {
+				record := &pb.TransactionRecord{}
+				err := proto.Unmarshal(serialized["Value"].B, record)
+				if err != nil {
+					return &[]*pb.TransactionRecord{}, err
+				}
+
+				results[resultIndex] = record
+				resultIndex++
+
+				input = map[string]*awsdynamo.KeysAndAttributes{}
+				input[dynamo.dataTable] = &awsdynamo.KeysAndAttributes{}
+				input[dynamo.dataTable].Keys = []map[string]*awsdynamo.AttributeValue{}
+			}
+		}
+	}
+
+	response, err := dynamo.dynamoClient.BatchGetItem(&awsdynamo.BatchGetItemInput{RequestItems: input})
+	if err != nil {
+		return &[]*pb.TransactionRecord{}, err
+	}
+
+	for _, serialized := range response.Responses[dynamo.dataTable] {
+		record := &pb.TransactionRecord{}
+		err := proto.Unmarshal(serialized["Value"].B, record)
+		if err != nil {
+			return &[]*pb.TransactionRecord{}, err
+		}
+
+		results[resultIndex] = record
+		resultIndex++
+	}
+
+	return &results, nil
+}
+
 func (dynamo *DynamoStorageManager) Put(key string, val *pb.KeyValuePair) error {
 	serialized, err := proto.Marshal(val)
 	if err != nil {
@@ -98,8 +156,53 @@ func (dynamo *DynamoStorageManager) Put(key string, val *pb.KeyValuePair) error 
 
 	input := constructPutInput(key, dynamo.dataTable, serialized)
 	_, err = dynamo.dynamoClient.PutItem(input)
-
 	return err
+}
+
+func (dynamo *DynamoStorageManager) MultiPut(data *map[string]*pb.KeyValuePair) error {
+	inputData := map[string][]*awsdynamo.WriteRequest{}
+	inputData[dynamo.dataTable] = []*awsdynamo.WriteRequest{}
+
+	numWrites := 0
+	for key, val := range *data {
+		serialized, err := proto.Marshal(val)
+		if err != nil {
+			return err
+		}
+
+		keyData := map[string]*awsdynamo.AttributeValue{
+			"DataKey": {
+				S: aws.String(key),
+			},
+			"Value": {
+				B: serialized,
+			},
+		}
+
+		putReq := &awsdynamo.PutRequest{Item: keyData}
+		inputData[dynamo.dataTable] = append(inputData[dynamo.dataTable], &awsdynamo.WriteRequest{PutRequest: putReq})
+
+		// DynamoDB's BatchWriteItem only supports 25 writes at a time, so if we
+		// have more than that, we break it up.
+		numWrites += 1
+		if numWrites == 25 {
+			_, err := dynamo.dynamoClient.BatchWriteItem(&awsdynamo.BatchWriteItemInput{RequestItems: inputData})
+			if err != nil {
+				return err
+			}
+
+			inputData = map[string][]*awsdynamo.WriteRequest{}
+			inputData[dynamo.dataTable] = []*awsdynamo.WriteRequest{}
+			numWrites = 0
+		}
+	}
+
+	if len(inputData[dynamo.dataTable]) > 0 {
+		_, err := dynamo.dynamoClient.BatchWriteItem(&awsdynamo.BatchWriteItemInput{RequestItems: inputData})
+		return err
+	}
+
+	return nil
 }
 
 func (dynamo *DynamoStorageManager) Delete(key string) error {
@@ -110,6 +213,38 @@ func (dynamo *DynamoStorageManager) Delete(key string) error {
 
 	_, err := dynamo.dynamoClient.DeleteItem(input)
 
+	return err
+}
+
+func (dynamo *DynamoStorageManager) MultiDelete(keys *[]string) error {
+	inputData := map[string][]*awsdynamo.WriteRequest{}
+	inputData[dynamo.dataTable] = []*awsdynamo.WriteRequest{}
+
+	numDeletes := 0
+	for _, key := range *keys {
+		keyData := map[string]*awsdynamo.AttributeValue{
+			"DataKey": {
+				S: aws.String(key),
+			},
+		}
+
+		deleteReq := &awsdynamo.DeleteRequest{Key: keyData}
+		inputData[dynamo.dataTable] = append(inputData[dynamo.dataTable], &awsdynamo.WriteRequest{DeleteRequest: deleteReq})
+
+		numDeletes += 1
+		if numDeletes == 25 {
+			_, err := dynamo.dynamoClient.BatchWriteItem(&awsdynamo.BatchWriteItemInput{RequestItems: inputData})
+			if err != nil {
+				return err
+			}
+
+			inputData = map[string][]*awsdynamo.WriteRequest{}
+			inputData[dynamo.dataTable] = []*awsdynamo.WriteRequest{}
+			numDeletes = 0
+		}
+	}
+
+	_, err := dynamo.dynamoClient.BatchWriteItem(&awsdynamo.BatchWriteItemInput{RequestItems: inputData})
 	return err
 }
 

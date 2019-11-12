@@ -4,7 +4,7 @@ import (
 	pb "github.com/vsreekanti/aft/proto/aft"
 )
 
-var transactionKey = "transactions/%s-%d"
+const TransactionKey = "transactions/%s-%d"
 
 type StorageManager interface {
 	// Start a new transaction with the execution ID passed in; this ID will be
@@ -21,9 +21,16 @@ type StorageManager interface {
 	// Retrieve a transaction record from the storage engine.
 	GetTransaction(transactionKey string) (*pb.TransactionRecord, error)
 
+	// Retrieve a set of transactions from the storage engine.
+	MultiGetTransaction(transactionKeys *[]string) (*[]*pb.TransactionRecord, error)
+
 	// As a part of the transaction owned by tid, insert a key-value pair into
 	// the storage engine.
 	Put(key string, val *pb.KeyValuePair) error
+
+	// As a part of transaction owned by tid, insert a set of key-value pairs
+	// into the storage engine.
+	MultiPut(*map[string]*pb.KeyValuePair) error
 
 	// Retrieve the given key as a part of the transaction tid.
 	Get(key string) (*pb.KeyValuePair, error)
@@ -33,4 +40,7 @@ type StorageManager interface {
 
 	// Deletes the given key from the underlying storage engine.
 	Delete(key string) error
+
+	// Delete multiple keys at once.
+	MultiDelete(*[]string) error
 }

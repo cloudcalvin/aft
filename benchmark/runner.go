@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"math/rand"
 	"os"
 	"strconv"
@@ -26,10 +27,20 @@ var numRequests = flag.Int("numRequests", 1000, "The total number of requests in
 var numThreads = flag.Int("numThreads", 10, "The total number of parallel threads in the benchmark")
 var numKeys = flag.Int64("numKeys", 1000, "The number of keys to operate over")
 var replicaList = flag.String("replicaList", "", "A comma separated list of addresses of Aft replicas")
+var address = flag.String("address", "", "The Aft ELB address to communicate with")
 var benchmarkType = flag.String("benchmarkType", "", "The type of benchmark to run. Options are aft, plain, and local.")
 
 func main() {
+	// Parse command line flags.
 	flag.Parse()
+
+	// Setup the logging infrastructure.
+	f, err := os.OpenFile("log.txt", os.O_RDWR|os.O_CREATE, 0755)
+	if err != nil {
+		fmt.Println("Could not open log file:\n", err)
+		os.Exit(1)
+	}
+	log.SetOutput(f)
 
 	if *benchmarkType == "" {
 		fmt.Println("No benchmarkType provided. Defaulting to aft...")
@@ -84,9 +95,9 @@ func main() {
 	nninth, _ := stats.Percentile(latencies, 99.0)
 	totalThruput, _ := stats.Sum(thruputs)
 
-	if len(errors) > 0 {
-		fmt.Printf("Errors: %v\n", errors)
-	}
+	// if len(errors) > 0 {
+	// 	fmt.Printf("Errors: %v\n", errors)
+	// }
 
 	fmt.Printf("Number of errors: %d\n", len(errors))
 	fmt.Printf("Median latency: %.6f\n", median)
@@ -114,15 +125,15 @@ func benchmark(
 	)
 
 	type lambdaInput struct {
-		count    int
-		replicas []string
+		Count    int      `json:"count"`
+		Replicas []string `json:"replicas"`
 	}
 
 	pyld := lambdaInput{
-		count:    1,
-		replicas: replicas,
+		Count:    1,
+		Replicas: replicas,
 	}
-	payload, _ := json.Marshal(pyld)
+	payload, _ := json.Marshal(&pyld)
 
 	input := &lambda.InvokeInput{
 		FunctionName:   aws.String("aft-test"),
@@ -131,8 +142,23 @@ func benchmark(
 	}
 
 	benchStart := time.Now()
+	epochStart := time.Now()
+	epochId := 0
+	epochRequests := 0
+	epochLength := 2.0
+
 	requestId := int64(0)
 	for ; requestId < threadRequestCount; requestId++ {
+
+		epochEnd := time.Now()
+		if epochEnd.Sub(epochStart).Seconds() > epochLength {
+			log.Println(fmt.Sprintf("%s: Epoch %d: %f", time.Now().String(), epochId, float64(epochRequests)/epochLength))
+
+			epochId += 1
+			epochRequests = 0
+			epochStart = time.Now()
+		}
+
 		requestStart := time.Now()
 		response, err := lambdaClient.Invoke(input)
 		requestEnd := time.Now()
@@ -146,10 +172,13 @@ func benchmark(
 			errors = append(errors, err.Error())
 		} else {
 			// Next, we try to parse the response.
-			bts := response.Payload
+			bts := string(response.Payload)
 
-			runtimes := []float64{}
-			err = json.Unmarshal(bts, &runtimes)
+			if !strings.Contains(bts, "Success") {
+				errors = append(errors, bts)
+			} else {
+				epochRequests += 1
+			}
 		}
 	}
 
@@ -211,8 +240,7 @@ func benchmarkPlain(
 			err = json.Unmarshal(bts, &inconsistencies)
 
 			if len(inconsistencies) < 2 {
-				fmt.Println(string(bts))
-				fmt.Println(err)
+				errors = append(errors, string(bts))
 			} else {
 				wrInconsistencies += inconsistencies[0]
 				rrInconsistencies += inconsistencies[1]
@@ -246,7 +274,7 @@ func benchmarkLocal(
 
 	clients := []*pb.AftClient{}
 	for _, replica := range replicas {
-		conn, err := grpc.Dial(fmt.Sprint("%s:7654", replica), grpc.WithInsecure())
+		conn, err := grpc.Dial(fmt.Sprintf("%s:7654", replica), grpc.WithInsecure())
 		if err != nil {
 			fmt.Printf("Unexpected error:\n%v\n", err)
 			os.Exit(1)
@@ -275,7 +303,8 @@ func benchmarkLocal(
 
 		requestStart := time.Now()
 		client := clients[rand.Intn(len(clients))] // Pick a client to use at random.
-		tag, _ := (*client).StartTransaction(context.Background(), &empty.Empty{})
+		tag, err := (*client).StartTransaction(context.Background(), &empty.Empty{})
+		fmt.Println(err)
 
 		for keyId := 0; keyId < keyCount; keyId++ {
 			key := strconv.FormatUint(zipf.Uint64(), 10)

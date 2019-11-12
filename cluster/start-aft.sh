@@ -14,7 +14,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-IP=`ifconfig eth0 | grep 'inet' | grep -v inet6 | awk '{print $2}'`
+IP=`curl http://169.254.169.254/latest/meta-data/public-ipv4`
 
 # A helper function that takes a space separated list and generates a string
 # that parses as a YAML list.
@@ -43,24 +43,61 @@ protoc -I . aft.proto --go_out=plugins=grpc:.
 cd $AFT_HOME
 
 # Build the most recent version of the code.
-go build
+
+if [[ "$ROLE" = "manager" ]] || [[ "$ROLE" = "lb" ]]; then
+  mkdir -p /root/.kube
+fi
 
 # Wait for the aft-config file to be passed in.
 while [[ ! -f $AFT_HOME/conf/aft-config.yml ]]; do
   X=1 # Empty command to pass.
 done
 
+if [[ "$ROLE" != "bench" ]] && [[ "$ROLE" != "lb" ]]; then
+  while [[ ! -f replicas.txt ]]; do
+    X=1 # Empty command to pass.
+  done
+fi
+
+REPLICA_IPS=`cat replicas.txt | awk 'BEGIN{ORS=" "}1'`
+
 # Generate the YML config file.
 echo "ipAddress: $IP" >> conf/aft-config.yml
+echo "managerAddress: $MANAGER" >> conf/aft-config.yml
 LST=$(gen_yml_list "$REPLICA_IPS")
 echo "replicaList:" >> conf/aft-config.yml
 echo "$LST" >> conf/aft-config.yml
 
+# go get -u -d ./...
+
 # Start the process.
 if [[ "$ROLE" = "aft" ]]; then
+  go build
   ./aft
+elif [[ "$ROLE" = "manager" ]]; then
+  cd $AFT_HOME/gc
+  go build
+
+  REPLICA_IPS=`cat ../replicas.txt | awk 'BEGIN{ORS=","}1'`
+  GC_IPS=`cat ../gcs.txt | awk 'BEGIN{ORS=","}1'`
+
+  python3 ft-server.py &
+
+  ./gc -replicaList $REPLICA_IPS -gcReplicaList $GC_IPS
 elif [[ "$ROLE" = "bench" ]]; then
   cd $AFT_HOME/benchmark
   go build
   python3 benchmark_server.py
+elif [[ "$ROLE" = "lb" ]]; then
+  cd $GOPATH/src/k8s.io/klog
+  git checkout v0.4.0
+
+  cd $AFT_HOME/lb
+  go build
+  ./lb
+elif [[ "$ROLE" = "gc" ]]; then
+  cd $AFT_HOME/gc/server
+  go build
+
+  ./server
 fi

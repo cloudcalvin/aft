@@ -19,12 +19,27 @@ type ConsistencyManager interface {
 	GetValidKeyVersion(
 		key string,
 		transaction *pb.TransactionRecord,
-		readCache *map[string]pb.KeyValuePair,
-		readCacheLock *sync.RWMutex,
-		keyVersionIndex *map[string]*[]string,
+		finishedTransactions *map[string]*pb.TransactionRecord,
+		finishedTransactionsLock *sync.RWMutex,
+		keyVersionIndex *map[string]*map[string]bool,
 		keyVersionIndexLock *sync.RWMutex,
+		transactionDependencies *map[string]int,
+		transactionDependenciesLock *sync.RWMutex,
+		latestVersionIndex *map[string]string,
+		latestVersionIndexLock *sync.RWMutex,
 	) (string, error)
 
 	// TODO: Add description of this function.
 	GetStorageKeyName(key string, timestamp int64, transactionId string) string
+
+	// TODO: Add description of this function.
+	CompareKeys(one string, two string) bool
+
+	// TODO: Add description of this function.
+	UpdateTransactionDependencies(
+		keyVersion string,
+		finished bool,
+		transactionDependencies *map[string]int,
+		transactionDependenciesLock *sync.RWMutex,
+	)
 }

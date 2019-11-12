@@ -31,10 +31,15 @@ RUN apt-get update
 RUN apt-get install -y software-properties-common
 RUN add-apt-repository -y ppa:longsleep/golang-backports
 RUN apt-get update
-RUN apt-get install -y golang-go wget unzip git ca-certificates net-tools
+RUN apt-get install -y golang-go wget unzip git ca-certificates net-tools python3-pip libzmq3-dev curl apt-transport-https
+
+# Install kubectl for the management pod.
+RUN curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
+RUN echo "deb https://apt.kubernetes.io/ kubernetes-xenial main" | tee -a /etc/apt/sources.list.d/kubernetes.list
+RUN apt-get update
+RUN apt-get install -y kubectl
 
 # Updates certificates, so go get works.
-RUN touch /a && rm /a
 RUN update-ca-certificates
 
 # Install protoc.
@@ -57,7 +62,16 @@ RUN which protoc-gen-go
 WORKDIR $AFT_HOME/proto/aft
 RUN protoc -I . aft.proto --go_out=plugins=grpc:.
 WORKDIR $AFT_HOME
-RUN go get -u ./...
+RUN go get -d ./...
+RUN go get -u -d k8s.io/klog
+RUN cd $GOPATH/src/k8s.io/klog && git checkout v0.4.0
+
+# Install Python dependencies.
+RUN pip3 install zmq kubernetes boto3
+
+WORKDIR $AFT_HOME/..
+RUN rm -rf aft
+RUN git clone https://github.com/vsreekanti/aft
 
 WORKDIR /
 COPY start-aft.sh /start-aft.sh
