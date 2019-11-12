@@ -9,9 +9,9 @@ import (
 	uuid "github.com/nu7hatch/gouuid"
 
 	"github.com/vsreekanti/aft/config"
-	"github.com/vsreekanti/aft/consistency"
+	"github.com/vsreekanti/aft/lib/consistency"
+	"github.com/vsreekanti/aft/lib/storage"
 	pb "github.com/vsreekanti/aft/proto/aft"
-	"github.com/vsreekanti/aft/storage"
 )
 
 type AftServer struct {
@@ -38,7 +38,7 @@ type AftServer struct {
 }
 
 func NewAftServer() (*AftServer, *config.AftConfig) {
-	conf := config.ParseConfig("conf/aft-config.yml")
+	conf := config.ParseConfig()
 
 	var consistencyManager consistency.ConsistencyManager
 	switch conf.ConsistencyType {

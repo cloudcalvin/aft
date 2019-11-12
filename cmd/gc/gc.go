@@ -12,7 +12,7 @@ import (
 	zmq "github.com/pebbe/zmq4"
 
 	"github.com/vsreekanti/aft/config"
-	"github.com/vsreekanti/aft/consistency"
+	"github.com/vsreekanti/aft/lib/consistency"
 	pb "github.com/vsreekanti/aft/proto/aft"
 )
 
@@ -64,7 +64,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	conf := config.ParseConfig("../conf/aft-config.yml")
+	conf := config.ParseConfig()
 
 	var consistencyManager consistency.ConsistencyManager
 	switch conf.ConsistencyType {

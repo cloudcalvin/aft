@@ -49,7 +49,7 @@ if [[ "$ROLE" = "manager" ]] || [[ "$ROLE" = "lb" ]]; then
 fi
 
 # Wait for the aft-config file to be passed in.
-while [[ ! -f $AFT_HOME/conf/aft-config.yml ]]; do
+while [[ ! -f $AFT_HOME/config/aft-config.yml ]]; do
   X=1 # Empty command to pass.
 done
 
@@ -62,20 +62,22 @@ fi
 REPLICA_IPS=`cat replicas.txt | awk 'BEGIN{ORS=" "}1'`
 
 # Generate the YML config file.
-echo "ipAddress: $IP" >> conf/aft-config.yml
-echo "managerAddress: $MANAGER" >> conf/aft-config.yml
+echo "ipAddress: $IP" >> config/aft-config.yml
+echo "managerAddress: $MANAGER" >> config/aft-config.yml
 LST=$(gen_yml_list "$REPLICA_IPS")
-echo "replicaList:" >> conf/aft-config.yml
-echo "$LST" >> conf/aft-config.yml
+echo "replicaList:" >> config/aft-config.yml
+echo "$LST" >> config/aft-config.yml
 
 # go get -u -d ./...
 
 # Start the process.
 if [[ "$ROLE" = "aft" ]]; then
+  cd $AFT_HOME/cmd/aft
+
   go build
   ./aft
 elif [[ "$ROLE" = "manager" ]]; then
-  cd $AFT_HOME/gc
+  cd $AFT_HOME/cmd/gc
   go build
 
   REPLICA_IPS=`cat ../replicas.txt | awk 'BEGIN{ORS=","}1'`
@@ -85,18 +87,18 @@ elif [[ "$ROLE" = "manager" ]]; then
 
   ./gc -replicaList $REPLICA_IPS -gcReplicaList $GC_IPS
 elif [[ "$ROLE" = "bench" ]]; then
-  cd $AFT_HOME/benchmark
+  cd $AFT_HOME/cmd/benchmark
   go build
   python3 benchmark_server.py
 elif [[ "$ROLE" = "lb" ]]; then
   cd $GOPATH/src/k8s.io/klog
   git checkout v0.4.0
 
-  cd $AFT_HOME/lb
+  cd $AFT_HOME/cmd/lb
   go build
   ./lb
 elif [[ "$ROLE" = "gc" ]]; then
-  cd $AFT_HOME/gc/server
+  cd $AFT_HOME/cmd/gc/server
   go build
 
   ./server

@@ -9,4 +9,7 @@ __pycache__
 
 # EXECUTABLES
 
-aft
+cmd/aft/aft
+cmd/benchmark/benchmark
+cmd/gc/gc
+cmd/lb/lb

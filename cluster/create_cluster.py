@@ -163,7 +163,7 @@ if __name__ == '__main__':
 
                                      If no configuration file base is
                                      specified, we use the default
-                                     ($HYDRO_HOME/anna/conf/anna-base.yml).''')
+                                     ($config/aft-base.yml).''')
 
     parser.add_argument('-r', '--replicas', nargs=1, type=int, metavar='R',
                         help='The number of Aft replicas to start with ' +
@@ -180,7 +180,7 @@ if __name__ == '__main__':
     parser.add_argument('--conf', nargs='?', type=str,
                         help='The configuration file to start the cluster with'
                         + ' (optional)', dest='conf',
-                        default='../conf/aft-base.yml')
+                        default='../config/aft-base.yml')
     parser.add_argument('--ssh-key', nargs='?', type=str,
                         help='The SSH key used to configure and connect to ' +
                         'each node (optional)', dest='sshkey',

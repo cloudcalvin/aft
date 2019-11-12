@@ -43,7 +43,7 @@ func createSocket(tp zmq.Type, context *zmq.Context, address string, bind bool) 
 }
 
 func main() {
-	conf := config.ParseConfig("../../conf/aft-config.yml")
+	conf := config.ParseConfig()
 
 	var consistencyManager consistency.ConsistencyManager
 	switch conf.ConsistencyType {

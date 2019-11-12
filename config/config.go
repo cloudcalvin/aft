@@ -4,6 +4,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v2"
 )
@@ -16,8 +17,11 @@ type AftConfig struct {
 	ManagerAddress  string   `yaml:"managerAddress"`
 }
 
-func ParseConfig(filename string) *AftConfig {
-	bts, err := ioutil.ReadFile(filename)
+func ParseConfig() *AftConfig {
+	home := os.Getenv("GOPATH")
+	confPath := filepath.Join(home, "src", "github.com", "vsreekanti", "aft", "config", "aft-config.yml")
+
+	bts, err := ioutil.ReadFile(confPath)
 	if err != nil {
 		log.Fatal("Unable to read aft-config.yml. Please make sure that the config is properly configured and retry:\n%v", err)
 		os.Exit(1)
