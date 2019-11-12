@@ -12,20 +12,34 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-apiVersion: kops/v1alpha2
-kind: InstanceGroup
+apiVersion: apps/v1
+kind: DaemonSet
 metadata:
-  labels:
-    kops.k8s.io/cluster: CLUSTER_NAME
-  name: benchmark-instances
+  name: gc-nodes
+  labels: 
+    role: gc
 spec:
-  image: kope.io/k8s-1.11-debian-stretch-amd64-hvm-ebs-2018-08-17
-  machineType: m4.xlarge
-  maxSize: NUM_DUMMY
-  minSize: NUM_DUMMY
-  role: Node
-  rootVolumeSize: 32
-  nodeLabels:
-    role: benchmark
-  subnets:
-    - us-east-1a
+  selector:
+    matchLabels:
+      role: gc
+  template:
+    metadata:
+      labels:
+        role: gc
+    spec:
+      nodeSelector:
+        role: gc
+      hostNetwork: true
+      containers:
+      - name: gc-container
+        image: vsreekanti/aft
+        imagePullPolicy: Always
+        env: 
+        - name: REPO_BRANCH
+          value: master
+        - name: AWS_ACCESS_KEY_ID
+          value: ACCESS_KEY_ID_DUMMY
+        - name: AWS_SECRET_ACCESS_KEY
+          value: AWS_SECRET_KEY_DUMMY
+        - name: ROLE
+          value: gc

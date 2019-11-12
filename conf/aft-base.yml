@@ -1,2 +1,2 @@
 consistencyType: read-atomic
-storageType: redis
+storageType: dynamo 

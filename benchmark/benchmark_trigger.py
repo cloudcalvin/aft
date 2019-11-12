@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import datetime
 import sys
 
 import zmq
@@ -35,6 +36,7 @@ def main():
 
     conns = []
     context = zmq.Context(1)
+    print('Starting benchmark at %s' % (str(datetime.datetime.now())))
     for server in servers:
         for i in range(args.tpm[0]):
             conn = context.socket(zmq.REQ)

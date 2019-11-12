@@ -74,6 +74,9 @@ def add_nodes(client, apps_client, cfile, kinds, counts, management_ip,
                 for container in pod.spec.containers:
                     cname = container.name
                     created_pods.append((pname, cname))
+                    pod.metadata.labels['aftReady'] = 'isready'
+                    client.patch_namespaced_pod(pod.metadata.name,
+                                                util.NAMESPACE, pod)
 
             # Copy the KVS config into all recently created pods.
             os.system('cp %s ./aft-config.yml' % cfile)
