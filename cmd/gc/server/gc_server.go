@@ -10,9 +10,9 @@ import (
 	zmq "github.com/pebbe/zmq4"
 
 	"github.com/vsreekanti/aft/config"
-	"github.com/vsreekanti/aft/consistency"
+	"github.com/vsreekanti/aft/lib/consistency"
+	"github.com/vsreekanti/aft/lib/storage"
 	pb "github.com/vsreekanti/aft/proto/aft"
-	"github.com/vsreekanti/aft/storage"
 )
 
 const (
