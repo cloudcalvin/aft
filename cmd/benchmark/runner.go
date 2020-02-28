@@ -26,6 +26,7 @@ import (
 var numRequests = flag.Int("numRequests", 1000, "The total number of requests in the benchmark")
 var numThreads = flag.Int("numThreads", 10, "The total number of parallel threads in the benchmark")
 var numKeys = flag.Int64("numKeys", 1000, "The number of keys to operate over")
+var numReads = flag.Int64("numReads", 1, "The number of reads to do per transaction")
 var replicaList = flag.String("replicaList", "", "A comma separated list of addresses of Aft replicas")
 var address = flag.String("address", "", "The Aft ELB address to communicate with")
 var benchmarkType = flag.String("benchmarkType", "", "The type of benchmark to run. Options are aft, plain, and local.")
@@ -47,8 +48,8 @@ func main() {
 		*benchmarkType = "aft"
 	}
 
-	if (*benchmarkType == "aft" || *benchmarkType == "local") && *replicaList == "" {
-		fmt.Printf("No Aft replicas provided for benchmark of type %s. Please use the --replicaList flag.\n", *benchmarkType)
+	if (*benchmarkType == "aft" || *benchmarkType == "local") && *address == "" {
+		fmt.Printf("No Aft service address provided for benchmark of type %s. Please use the --address flag.\n", *benchmarkType)
 		os.Exit(1)
 	}
 
@@ -95,9 +96,9 @@ func main() {
 	nninth, _ := stats.Percentile(latencies, 99.0)
 	totalThruput, _ := stats.Sum(thruputs)
 
-	// if len(errors) > 0 {
-	// 	fmt.Printf("Errors: %v\n", errors)
-	// }
+	if len(errors) > 0 {
+		fmt.Printf("Errors: %v\n", errors)
+	}
 
 	fmt.Printf("Number of errors: %d\n", len(errors))
 	fmt.Printf("Median latency: %.6f\n", median)
@@ -126,12 +127,14 @@ func benchmark(
 
 	type lambdaInput struct {
 		Count   int    `json:"count"`
+		Reads   int    `json:"reads"`
 		Address string `json:"address"`
 	}
 
 	pyld := lambdaInput{
-		Count:   1,
+		Count:   2,
 		Address: address,
+		Reads:   int(*numReads),
 	}
 	payload, _ := json.Marshal(&pyld)
 

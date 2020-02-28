@@ -83,5 +83,5 @@ def add_nodes(client, apps_client, cfile, kinds, counts, management_ip,
 
             for pname, cname in created_pods:
                 util.copy_file_to_pod(client, 'aft-config.yml', pname,
-                                      '/go/src/github.com/vsreekanti/aft/conf', cname)
+                                      '/go/src/github.com/vsreekanti/aft/config', cname)
             os.system('rm ./aft-config.yml')

@@ -77,7 +77,7 @@ def create_cluster(replica_count, gc_count, lb_count, bench_count, cfile,
     management_pname = management_spec['metadata']['name']
     management_cname = management_spec['spec']['containers'][0]['name']
     util.copy_file_to_pod(client, 'aft-config.yml', management_pname,
-                          '/go/src/github.com/vsreekanti/aft/conf',
+                          '/go/src/github.com/vsreekanti/aft/config',
                           management_cname)
     util.copy_file_to_pod(client, 'replicas.txt', management_pname,
                           '/go/src/github.com/vsreekanti/aft',

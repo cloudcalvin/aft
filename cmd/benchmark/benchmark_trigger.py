@@ -20,6 +20,8 @@ def main():
     parser.add_argument('-tp', '--threadPerServer', nargs=1, type=int,
                         metavar='U', help='The number of benchmark servers' +
                         'per machine to contact', dest='tpm', required=True)
+    parser.add_argument('-nr', '--numReads', nargs=1, type=int,
+                        metavar='R', dest='nr', required=False, default=1)
 
     args = parser.parse_args()
 
@@ -31,8 +33,8 @@ def main():
 
     print('Found %d servers:%s' % (len(servers), '\n\t-' + '\n\t-'.join(servers)))
 
-    message = ('%d:%d:%s:aft') % (args.threads[0], args.threads[0] *
-                              args.requests[0], args.replicas[0])
+    message = ('%d:%d:%s:%d:aft') % (args.threads[0], args.threads[0] *
+                              args.requests[0], args.replicas[0], args.nr[0])
 
     conns = []
     context = zmq.Context(1)
