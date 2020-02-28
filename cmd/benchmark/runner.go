@@ -64,7 +64,7 @@ func main() {
 	for tid := 0; tid < *numThreads; tid++ {
 		switch *benchmarkType {
 		case "aft":
-			go benchmark(tid, requestsPerThread, replicas, latencyChannel, errorChannel, totalTimeChannel)
+			go benchmark(tid, requestsPerThread, *address, latencyChannel, errorChannel, totalTimeChannel)
 		case "plain":
 			go benchmarkPlain(tid, requestsPerThread, latencyChannel, errorChannel, totalTimeChannel)
 		case "local":
@@ -111,7 +111,7 @@ func main() {
 func benchmark(
 	tid int,
 	threadRequestCount int64,
-	replicas []string,
+	address string,
 	latencyChannel chan []float64,
 	errorChannel chan []string,
 	totalTimeChannel chan float64,
@@ -125,13 +125,13 @@ func benchmark(
 	)
 
 	type lambdaInput struct {
-		Count    int      `json:"count"`
-		Replicas []string `json:"replicas"`
+		Count   int    `json:"count"`
+		Address string `json:"address"`
 	}
 
 	pyld := lambdaInput{
-		Count:    1,
-		Replicas: replicas,
+		Count:   1,
+		Address: address,
 	}
 	payload, _ := json.Marshal(&pyld)
 
