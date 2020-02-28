@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"os"
@@ -96,7 +97,7 @@ func main() {
 }
 
 func getAddresses(client *kubernetes.Clientset) ([]string, error) {
-	nodes, err := client.CoreV1().Nodes().List(v1meta.ListOptions{LabelSelector: "role=aft"})
+	nodes, err := client.CoreV1().Nodes().List(context.TODO(), v1meta.ListOptions{LabelSelector: "role=aft"})
 	if err != nil {
 		return []string{}, err
 	}
@@ -122,7 +123,7 @@ func getNodeAddress(addresses []v1.NodeAddress, tp v1.NodeAddressType) string {
 }
 
 func checkNodeReady(client *kubernetes.Clientset, nodeName string) bool {
-	pods, err := client.CoreV1().Pods("default").List(v1meta.ListOptions{LabelSelector: "role=aft", FieldSelector: fmt.Sprintf("spec.nodeName=%s", nodeName)})
+	pods, err := client.CoreV1().Pods("default").List(context.TODO(), v1meta.ListOptions{LabelSelector: "role=aft", FieldSelector: fmt.Sprintf("spec.nodeName=%s", nodeName)})
 	if err != nil || len(pods.Items) == 0 {
 		fmt.Println("Unexpected error while checking pod status:\n", err)
 		return false

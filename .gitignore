@@ -12,4 +12,5 @@ __pycache__
 cmd/aft/aft
 cmd/benchmark/benchmark
 cmd/gc/gc
+cmd/gc/server/server
 cmd/lb/lb
