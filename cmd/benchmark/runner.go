@@ -26,10 +26,11 @@ import (
 var numRequests = flag.Int("numRequests", 1000, "The total number of requests in the benchmark")
 var numThreads = flag.Int("numThreads", 10, "The total number of parallel threads in the benchmark")
 var numKeys = flag.Int64("numKeys", 1000, "The number of keys to operate over")
-var numReads = flag.Int64("numReads", 1, "The number of reads to do per transaction")
+var numReads = flag.Int64("numReads", 2, "The number of reads to do per transaction")
 var replicaList = flag.String("replicaList", "", "A comma separated list of addresses of Aft replicas")
 var address = flag.String("address", "", "The Aft ELB address to communicate with")
 var benchmarkType = flag.String("benchmarkType", "", "The type of benchmark to run. Options are aft, plain, and local.")
+var length = flag.Int("length", 2, "The number of functions to execute per request.")
 
 func main() {
 	// Parse command line flags.
@@ -65,7 +66,7 @@ func main() {
 	for tid := 0; tid < *numThreads; tid++ {
 		switch *benchmarkType {
 		case "aft":
-			go benchmark(tid, requestsPerThread, *address, latencyChannel, errorChannel, totalTimeChannel)
+			go benchmark(tid, requestsPerThread, *length, *address, latencyChannel, errorChannel, totalTimeChannel)
 		case "plain":
 			go benchmarkPlain(tid, requestsPerThread, latencyChannel, errorChannel, totalTimeChannel)
 		case "local":
@@ -112,6 +113,7 @@ func main() {
 func benchmark(
 	tid int,
 	threadRequestCount int64,
+	requestLength int,
 	address string,
 	latencyChannel chan []float64,
 	errorChannel chan []string,
@@ -129,12 +131,14 @@ func benchmark(
 		Count   int    `json:"count"`
 		Reads   int    `json:"reads"`
 		Address string `json:"address"`
+		Length  int    `json:"length"`
 	}
 
 	pyld := lambdaInput{
-		Count:   2,
+		Count:   1,
 		Address: address,
 		Reads:   int(*numReads),
+		Length:  requestLength,
 	}
 	payload, _ := json.Marshal(&pyld)
 

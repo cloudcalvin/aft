@@ -19,6 +19,7 @@ def main():
         num_requests = int(splits[1])
         replicas = splits[2]
         reads = int(splits[3])
+        length = int(splits[4])
 
         cmd = [
             './benchmark',
@@ -26,11 +27,12 @@ def main():
             '-numRequests', str(num_requests),
             '-address', replicas,
             '-numReads',    str(reads),
+            '-length', str(length)
         ]
 
-        if len(splits) > 4:
+        if len(splits) > 5:
             cmd.append('-benchmarkType')
-            cmd.append(splits[4])
+            cmd.append(splits[5])
 
         result = subprocess.run(cmd, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE)

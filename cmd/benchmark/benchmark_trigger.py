@@ -22,6 +22,8 @@ def main():
                         'per machine to contact', dest='tpm', required=True)
     parser.add_argument('-nr', '--numReads', nargs=1, type=int,
                         metavar='R', dest='nr', required=False, default=1)
+    parser.add_argument('-l', '--length', nargs=1, type=int,
+                        metavar='L', dest='len', required=False, default=2)
 
     args = parser.parse_args()
 
@@ -33,8 +35,9 @@ def main():
 
     print('Found %d servers:%s' % (len(servers), '\n\t-' + '\n\t-'.join(servers)))
 
-    message = ('%d:%d:%s:%d:aft') % (args.threads[0], args.threads[0] *
-                              args.requests[0], args.replicas[0], args.nr[0])
+    message = ('%d:%d:%s:%d:%d:aft') % (args.threads[0], args.threads[0] *
+                              args.requests[0], args.replicas[0], args.nr[0],
+                                        args.len[0])
 
     conns = []
     context = zmq.Context(1)
