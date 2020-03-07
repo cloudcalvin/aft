@@ -117,6 +117,9 @@ func (s *AftServer) Read(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyR
 
 			if ok {
 				returnValue = val.Value
+				s.CacheHitCountLock.Lock()
+				s.CacheHitCount += 1
+				s.CacheHitCountLock.Unlock()
 			} else { // Otherwise, get the correct key version from storage.
 				kvPair, err := s.StorageManager.Get(key)
 

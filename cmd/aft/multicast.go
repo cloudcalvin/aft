@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -198,6 +199,9 @@ func MulticastRoutine(
 
 		reportEnd := time.Now()
 		if reportEnd.Sub(reportStart).Seconds() > 1.0 {
+			server.CacheHitCountLock.RLock()
+			log.Printf("%d cache hits!", server.CacheHitCount)
+			server.CacheHitCountLock.RUnlock()
 			// Lock the mutex, serialize the newly committed transactions, and unlock.
 			server.FinishedTransactionLock.RLock()
 			replicaMessage := pb.TransactionList{}

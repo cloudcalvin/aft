@@ -35,6 +35,8 @@ type AftServer struct {
 	LocallyDeletedTransactionsLock *sync.RWMutex
 	LatestVersionIndex             map[string]string
 	LatestVersionIndexLock         *sync.RWMutex
+	CacheHitCount                  uint64
+	CacheHitCountLock              *sync.RWMutex
 }
 
 func NewAftServer() (*AftServer, *config.AftConfig) {
@@ -92,6 +94,8 @@ func NewAftServer() (*AftServer, *config.AftConfig) {
 		LocallyDeletedTransactionsLock: &sync.RWMutex{},
 		LatestVersionIndex:             map[string]string{},
 		LatestVersionIndexLock:         &sync.RWMutex{},
+		CacheHitCount:                  0,
+		CacheHitCountLock:              &sync.RWMutex{},
 	}
 
 	// Retrieve the list of committed transactions
