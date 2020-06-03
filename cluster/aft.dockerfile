@@ -62,6 +62,8 @@ RUN which protoc-gen-go
 WORKDIR $AFT_HOME/proto/aft
 RUN protoc -I . aft.proto --go_out=plugins=grpc:.
 WORKDIR $AFT_HOME
+RUN go get -u github.com/googleapis/gnostic 
+RUN cd $GOPATH/src/github.com/googleapis/gnostic && git checkout v0.4.0
 RUN go get -d ./...
 RUN go get -u -d k8s.io/klog
 RUN cd $GOPATH/src/k8s.io/klog && git checkout v0.4.0
@@ -71,8 +73,11 @@ RUN pip3 install zmq kubernetes boto3
 
 WORKDIR $AFT_HOME/..
 RUN rm -rf aft
+RUN touch a && rm a
 RUN git clone https://github.com/vsreekanti/aft
 
+WORKDIR $AFT_HOME
+RUN cd proto/aft && protoc -I . aft.proto --go_out=plugins=grpc:.
 WORKDIR /
 COPY start-aft.sh /start-aft.sh
 

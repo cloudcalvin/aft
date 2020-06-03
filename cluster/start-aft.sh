@@ -57,9 +57,9 @@ if [[ "$ROLE" != "bench" ]] && [[ "$ROLE" != "lb" ]]; then
   while [[ ! -f replicas.txt ]]; do
     X=1 # Empty command to pass.
   done
-fi
 
-REPLICA_IPS=`cat replicas.txt | awk 'BEGIN{ORS=" "}1'`
+  REPLICA_IPS=`cat replicas.txt | awk 'BEGIN{ORS=" "}1'`
+fi
 
 # Generate the YML config file.
 echo "ipAddress: $IP" >> config/aft-config.yml
@@ -72,34 +72,30 @@ echo "$LST" >> config/aft-config.yml
 
 # Start the process.
 if [[ "$ROLE" = "aft" ]]; then
-  cd $AFT_HOME/cmd/aft
-
-  go build
-  ./aft
+  make server
+  ./cmd/aft/aft
 elif [[ "$ROLE" = "manager" ]]; then
-  cd $AFT_HOME/cmd/gc
-  go build
+  make gc
 
   REPLICA_IPS=`cat ../replicas.txt | awk 'BEGIN{ORS=","}1'`
   GC_IPS=`cat ../gcs.txt | awk 'BEGIN{ORS=","}1'`
 
   python3 ft-server.py &
 
-  ./gc -replicaList $REPLICA_IPS -gcReplicaList $GC_IPS
+  ./cmd/gc/gc -replicaList $REPLICA_IPS -gcReplicaList $GC_IPS
 elif [[ "$ROLE" = "bench" ]]; then
-  cd $AFT_HOME/cmd/benchmark
-  go build
+  make benchmark
+  cd cmd/benchmark
   python3 benchmark_server.py
 elif [[ "$ROLE" = "lb" ]]; then
   cd $GOPATH/src/k8s.io/klog
   git checkout v0.4.0
 
-  cd $AFT_HOME/cmd/lb
-  go build
-  ./lb
+  cd $AFT_HOME
+  make lb
+  ./cmd/lb/lb
 elif [[ "$ROLE" = "gc" ]]; then
-  cd $AFT_HOME/cmd/gc/server
-  go build
+  make gc
 
-  ./server
+  ./cmd/gc/server/server
 fi
