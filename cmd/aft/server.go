@@ -62,6 +62,8 @@ func NewAftServer() (*AftServer, *config.AftConfig) {
 		storageManager = storage.NewDynamoStorageManager("AftData", "AftData")
 	case "redis":
 		storageManager = storage.NewRedisStorageManager("aft-test.kxmfgs.clustercfg.use1.cache.amazonaws.com:6379", "")
+	case "anna":
+		storageManager = storage.NewAnnaStorageManager(conf.IpAddress, conf.ElbAddress)
 	default:
 		log.Fatal(fmt.Sprintf("Unrecognized storageType %s. Valid types are: s3, dynamo, redis.", conf.StorageType))
 		os.Exit(3)

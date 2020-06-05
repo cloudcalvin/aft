@@ -13,6 +13,7 @@ type AftConfig struct {
 	ConsistencyType string   `yaml:"consistencyType"`
 	StorageType     string   `yaml:"storageType"`
 	IpAddress       string   `yaml:"ipAddress"`
+	ElbAddress      string   `yaml:"elbAddress"`
 	ReplicaList     []string `yaml:"replicaList"`
 	ManagerAddress  string   `yaml:"managerAddress"`
 }

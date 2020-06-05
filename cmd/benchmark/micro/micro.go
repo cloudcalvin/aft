@@ -104,8 +104,8 @@ func runAft(numRequests int, address string, numWrites int) ([]float64, []float6
 		txnStart := time.Now()
 		txn, _ := client.StartTransaction(context.TODO(), &empty.Empty{})
 
-		update := &pb.KeyRequest{Tid: txn.Id}
-		pair := &pb.KeyRequest_KeyPair{Value: writeData}
+		update := &pb.AftKeyRequest{Tid: txn.Id}
+		pair := &pb.AftKeyRequest_KeyPair{Value: writeData}
 		update.Pairs = append(update.Pairs, pair)
 		writeStart := time.Now()
 		for j := 0; j < numWrites; j++ {
@@ -148,10 +148,10 @@ func runAftBatch(numRequests int, address string, numWrites int) ([]float64, []f
 		txnStart := time.Now()
 		txn, _ := client.StartTransaction(context.TODO(), &empty.Empty{})
 
-		update := &pb.KeyRequest{Tid: txn.Id}
+		update := &pb.AftKeyRequest{Tid: txn.Id}
 		writeStart := time.Now()
 		for j := 0; j < numWrites; j++ {
-			pair := &pb.KeyRequest_KeyPair{Key: fmt.Sprintf("%d", j), Value: writeData}
+			pair := &pb.AftKeyRequest_KeyPair{Key: fmt.Sprintf("%d", j), Value: writeData}
 			update.Pairs = append(update.Pairs, pair)
 		}
 		client.Write(context.TODO(), update)

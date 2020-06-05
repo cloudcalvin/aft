@@ -12,7 +12,10 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-all: server benchmark gc lb
+all: ipc_server server benchmark gc lb
+
+ipc_server:
+	cd cmd/aft_ipc && go build
 
 server:
 	cd cmd/aft && go build
@@ -27,4 +30,4 @@ gc:
 lb:
 	cd cmd/lb && go build
 
-.PHONY: server benchmark gc lb
+.PHONY: ipc_server server benchmark gc lb

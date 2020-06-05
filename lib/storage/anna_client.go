@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"time"
 
 	"github.com/golang/protobuf/proto"
 	zmq "github.com/pebbe/zmq4"
@@ -79,14 +80,16 @@ func NewAnnaClient(elbAddress string, ipAddress string, local bool, tid int) *An
 		keyAddressPuller:   keyAddressPuller,
 		responseAddress:    responseAddress,
 		keyResponseAddress: keyResponseAddress,
+		socketCache:        map[string]*zmq.Socket{},
 	}
 }
 
 func (anna *AnnaClient) get(key string) (*annapb.KeyTuple, error) {
 	workers := anna.getWorkerAddresses(key)
 
-	if len(workers) == 0 {
-		return nil, errors.New(fmt.Sprintf("No workers found for key %s.", key))
+	for len(workers) == 0 {
+		fmt.Printf("%v: No workers found for key %s.\n", time.Now(), key)
+		workers = anna.getWorkerAddresses(key)
 	}
 
 	worker := workers[rand.Intn(len(workers))]
@@ -99,10 +102,7 @@ func (anna *AnnaClient) get(key string) (*annapb.KeyTuple, error) {
 	socket.SendBytes(bts, zmq.DONTWAIT)
 
 	response := &annapb.KeyResponse{}
-	bts, err := anna.responsePuller.RecvBytes(zmq.DONTWAIT)
-	for err != nil {
-		bts, err = anna.responsePuller.RecvBytes(zmq.DONTWAIT)
-	}
+	bts, _ = anna.responsePuller.RecvBytes(0)
 	proto.Unmarshal(bts, response)
 
 	// We only support one GET/PUT at a time.
@@ -168,10 +168,7 @@ func (anna *AnnaClient) put(key string, request *annapb.KeyRequest) (bool, error
 	socket.SendBytes(bts, zmq.DONTWAIT)
 
 	response := &annapb.KeyResponse{}
-	bts, err := anna.responsePuller.RecvBytes(zmq.DONTWAIT)
-	for err != nil {
-		bts, err = anna.responsePuller.RecvBytes(zmq.DONTWAIT)
-	}
+	bts, _ = anna.responsePuller.RecvBytes(0)
 	proto.Unmarshal(bts, response)
 
 	// We only support one GET/PUT at a time.
@@ -217,7 +214,9 @@ func (anna *AnnaClient) PutSet(key string, values []string) (bool, error) {
 
 func (anna *AnnaClient) getWorkerAddresses(key string) []string {
 	if addresses, ok := anna.addressCache[key]; ok {
-		return addresses
+		if len(addresses) > 0 {
+			return addresses
+		}
 	}
 	addresses := anna.queryRouting(key)
 	anna.addressCache[key] = addresses
@@ -241,10 +240,7 @@ func (anna *AnnaClient) queryRouting(key string) []string {
 	socket.SendBytes(bts, zmq.DONTWAIT)
 
 	response := &annapb.KeyAddressResponse{}
-	bts, err := anna.keyAddressPuller.RecvBytes(zmq.DONTWAIT)
-	for err != nil {
-		bts, err = anna.keyAddressPuller.RecvBytes(zmq.DONTWAIT)
-	}
+	bts, _ = anna.keyAddressPuller.RecvBytes(0)
 
 	proto.Unmarshal(bts, response)
 
@@ -260,7 +256,9 @@ func (anna *AnnaClient) getSocket(address string) *zmq.Socket {
 		return socket
 	}
 
-	return createSocket(zmq.PUSH, anna.context, address, false)
+	socket := createSocket(zmq.PUSH, anna.context, address, false)
+	anna.socketCache[address] = socket
+	return socket
 }
 
 func (anna *AnnaClient) prepareDataRequest(key string) *annapb.KeyRequest {

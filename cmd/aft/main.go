@@ -52,12 +52,12 @@ func (s *AftServer) StartTransaction(ctx context.Context, _ *empty.Empty) (*pb.T
 	}, nil
 }
 
-func (s *AftServer) Write(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyRequest, error) {
+func (s *AftServer) Write(ctx context.Context, requests *pb.AftKeyRequest) (*pb.AftKeyRequest, error) {
 	s.RunningTransactionLock.RLock()
 	txn := s.RunningTransactions[requests.Tid]
 	s.RunningTransactionLock.RUnlock()
 
-	resp := &pb.KeyRequest{Tid: requests.Tid}
+	resp := &pb.AftKeyRequest{Tid: requests.Tid}
 
 	for _, update := range requests.Pairs {
 		key := update.Key
@@ -68,18 +68,18 @@ func (s *AftServer) Write(ctx context.Context, requests *pb.KeyRequest) (*pb.Key
 			&keyUpdate{key: key, tid: requests.Tid, value: update.Value})
 		s.UpdateBufferLock.Unlock()
 
-		resp.Pairs = append(resp.Pairs, &pb.KeyRequest_KeyPair{Key: key})
+		resp.Pairs = append(resp.Pairs, &pb.AftKeyRequest_KeyPair{Key: key})
 	}
 
 	return resp, nil
 }
 
-func (s *AftServer) Read(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyRequest, error) {
+func (s *AftServer) Read(ctx context.Context, requests *pb.AftKeyRequest) (*pb.AftKeyRequest, error) {
 	s.RunningTransactionLock.RLock()
 	txn := s.RunningTransactions[requests.Tid]
 	s.RunningTransactionLock.RUnlock()
 
-	resp := &pb.KeyRequest{Tid: requests.Tid}
+	resp := &pb.AftKeyRequest{Tid: requests.Tid}
 
 	for _, request := range requests.Pairs {
 		var returnValue []byte
@@ -107,7 +107,7 @@ func (s *AftServer) Read(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyR
 				s.LatestVersionIndexLock,
 			)
 			if err != nil {
-				return &pb.KeyRequest{}, err
+				return &pb.AftKeyRequest{}, err
 			}
 
 			// If we've read the key version before, return that version.
@@ -145,7 +145,7 @@ func (s *AftServer) Read(ctx context.Context, requests *pb.KeyRequest) (*pb.KeyR
 			}
 		}
 
-		resp.Pairs = append(resp.Pairs, &pb.KeyRequest_KeyPair{Key: request.Key, Value: returnValue})
+		resp.Pairs = append(resp.Pairs, &pb.AftKeyRequest_KeyPair{Key: request.Key, Value: returnValue})
 	}
 
 	return resp, nil

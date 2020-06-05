@@ -52,6 +52,8 @@ func (racm *ReadAtomicConsistencyManager) GetValidKeyVersion(
 	// Check to see if the most recent version is valid, and if so return it
 	// immediately.
 	if ok {
+		fmt.Println(latestVersion)
+		fmt.Println(splitKey(latestVersion))
 		_, latestTxnId := splitKey(latestVersion)
 		finishedTransactionsLock.RLock()
 		latestTxn := (*finishedTransactions)[latestTxnId]
